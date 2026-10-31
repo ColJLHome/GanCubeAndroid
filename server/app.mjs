@@ -29,6 +29,16 @@ export function createApp(databasePath) {
   `);
   const app = express();
   app.use(express.json({ limit: '16kb' }));
+  app.get('/api/settings/debugging', (_req, res) => {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('debugging');
+    res.json(row ? { enabled: JSON.parse(row.value) } : null);
+  });
+  app.put('/api/settings/debugging', (req, res) => {
+    const { enabled } = req.body ?? {};
+    if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'Debugging must be enabled or disabled' });
+    db.prepare('INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at').run('debugging', JSON.stringify(enabled), new Date().toISOString());
+    res.json({ enabled });
+  });
   app.get('/api/settings/last-cube', (_req, res) => {
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('lastCube');
     res.json(row ? JSON.parse(row.value) : null);
@@ -46,13 +56,13 @@ export function createApp(databasePath) {
     const limit = Math.min(500, Math.max(1, Number.parseInt(String(req.query.limit ?? '20'), 10) || 20));
     const rows = db.prepare(`SELECT id, started_at AS startedAt, finished_at AS finishedAt,
       duration_ms AS durationMs, outcome, cube_id AS cubeId, cube_name AS cubeName,
-      initial_facelets AS initialFacelets FROM timings ORDER BY started_at DESC, rowid DESC LIMIT ?`).all(limit);
+      initial_facelets AS initialFacelets FROM timings WHERE outcome = 'solved' ORDER BY started_at DESC, rowid DESC LIMIT ?`).all(limit);
     res.json(rows);
   });
   app.post('/api/timings', (req, res) => {
     const { id, startedAt, finishedAt, durationMs, outcome, cubeId = null, cubeName = null, initialFacelets } = req.body ?? {};
     const isoDate = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
-    if (typeof id !== 'string' || !/^[\da-f-]{36}$/i.test(id) || !isoDate(startedAt) || !isoDate(finishedAt) || finishedAt < startedAt || !Number.isSafeInteger(durationMs) || durationMs < 0 || !['solved','manual','reset','interrupted'].includes(outcome) || typeof initialFacelets !== 'string' || !/^[URFDLB]{54}$/.test(initialFacelets) || (cubeId !== null && (typeof cubeId !== 'string' || cubeId.length > 512)) || (cubeName !== null && (typeof cubeName !== 'string' || cubeName.length > 256))) {
+    if (typeof id !== 'string' || !/^[\da-f-]{36}$/i.test(id) || !isoDate(startedAt) || !isoDate(finishedAt) || finishedAt < startedAt || !Number.isSafeInteger(durationMs) || durationMs < 0 || outcome !== 'solved' || typeof initialFacelets !== 'string' || !/^[URFDLB]{54}$/.test(initialFacelets) || (cubeId !== null && (typeof cubeId !== 'string' || cubeId.length > 512)) || (cubeName !== null && (typeof cubeName !== 'string' || cubeName.length > 256))) {
       return res.status(400).json({ error: 'Invalid timing record' });
     }
     // A client-generated ID makes retries safe if a response was lost.

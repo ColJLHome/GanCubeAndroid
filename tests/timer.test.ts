@@ -79,3 +79,19 @@ test('records exactly one timing with its start state, duration, and finish outc
   expect(record.mock.calls[0][0]).toMatchObject({ durationMs: 1234, outcome: 'solved', initialFacelets: scrambled });
   expect(record.mock.calls[0][0].id).toMatch(/^[\da-f-]{36}$/);
 });
+for (const action of ['manual', 'reset', 'disconnect', 'pagehide']) {
+  test(`${action} before solving does not record a timing`, () => {
+    timer.dispose();
+    const record = vi.fn();
+    timer = createTimer(button = document.createElement('button'), message, record);
+    timer.update(applyMove(SOLVED, 'R'));
+    button.click();
+    vi.advanceTimersByTime(1000);
+    if (action === 'manual') button.click();
+    else if (action === 'reset') timer.cancel();
+    else if (action === 'disconnect') timer.update(undefined);
+    else timer.interrupt();
+    timer.update(SOLVED);
+    expect(record).not.toHaveBeenCalled();
+  });
+}

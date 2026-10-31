@@ -43,8 +43,8 @@ test('cube settings and timing records persist after closing and reopening SQLit
   expect(await (await fetch(url + '/api/settings/last-cube')).json()).toEqual(cube);
   expect(await (await fetch(url + '/api/timings')).json()).toEqual([record]);
 });
-test('timing retries are idempotent and interrupted runs retain their outcome', async () => {
-  const record = { ...timing(), outcome: 'interrupted' };
+test('timing retries are idempotent', async () => {
+  const record = timing();
   expect((await write('/api/timings', 'POST', record)).status).toBe(201);
   expect((await write('/api/timings', 'POST', record)).status).toBe(200);
   expect(await (await fetch(url + '/api/timings')).json()).toEqual([record]);
@@ -62,4 +62,24 @@ test('timings are listed newest first with a bounded result count', async () => 
   await write('/api/timings', 'POST', older);
   await write('/api/timings', 'POST', newer);
   expect(await (await fetch(url + '/api/timings?limit=1')).json()).toEqual([newer]);
+});
+
+test('unfinished timings cannot be added and old unfinished runs are hidden', async () => {
+  for (const outcome of ['manual', 'reset', 'interrupted']) {
+    expect((await write('/api/timings', 'POST', { ...timing(), outcome })).status).toBe(400);
+  }
+  const legacy = timing();
+  db.prepare('INSERT INTO timings(id, started_at, finished_at, duration_ms, outcome, initial_facelets) VALUES (?, ?, ?, ?, ?, ?)').run(legacy.id, legacy.startedAt, legacy.finishedAt, legacy.durationMs, 'manual', legacy.initialFacelets);
+  const solved = timing();
+  await write('/api/timings', 'POST', solved);
+  expect(await (await fetch(url + '/api/timings?limit=1')).json()).toEqual([solved]);
+});
+test('debugging preference persists and accepts only a boolean', async () => {
+  expect(await (await fetch(url + '/api/settings/debugging')).json()).toBeNull();
+  expect((await write('/api/settings/debugging', 'PUT', { enabled: false })).status).toBe(200);
+  await stop();
+  await start();
+  expect(await (await fetch(url + '/api/settings/debugging')).json()).toEqual({ enabled: false });
+  expect((await write('/api/settings/debugging', 'PUT', { enabled: 'false' })).status).toBe(400);
+  expect(await (await fetch(url + '/api/settings/debugging')).json()).toEqual({ enabled: false });
 });

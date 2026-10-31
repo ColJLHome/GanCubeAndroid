@@ -35,3 +35,24 @@ test('batches persistence and works with storage disabled', () => {
   expect(() => log.flush()).not.toThrow();
   expect(log.text()).toContain('Connection lost');
 });
+test('disabling clears persisted entries and drops every subsequent log level', () => {
+  const log = createDebugLog(vi.fn());
+  log.add('INFO', 'Old entry');
+  log.setEnabled(false);
+  for (const level of ['INFO', 'WARN', 'ERROR'] as const) log.add(level, 'Must be ignored');
+  vi.advanceTimersByTime(1000);
+  expect(log.text()).toBe('');
+  expect(sessionStorage.getItem('gancube.debugLog.v1')).toBe('[]');
+  log.setEnabled(true);
+  log.add('INFO', 'New entry');
+  expect(log.text()).toContain('New entry');
+  expect(log.text()).not.toContain('Old entry');
+  log.flush();
+});
+test('starting disabled clears previous session logs', () => {
+  sessionStorage.setItem('gancube.debugLog.v1', JSON.stringify(['Old session']));
+  const log = createDebugLog(vi.fn(), false);
+  log.add('ERROR', 'Ignored');
+  expect(log.text()).toBe('');
+  expect(sessionStorage.getItem('gancube.debugLog.v1')).toBe('[]');
+});

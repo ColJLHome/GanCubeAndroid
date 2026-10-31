@@ -49,7 +49,68 @@ diff --git a/node_modules/gan-web-bluetooth/dist/esm/index.mjs b/node_modules/ga
      }
      async sendCubeCommand(command) {
          var commandMessage = this.driver.createCommandMessage(command);
-@@ -1261,9 +1281,9 @@
+@@ -916,7 +936,9 @@
+  *  - GAN14 ui FreePlay
+  */
+ class GanGen4ProtocolDriver {
+-    constructor() {
++    constructor(ignoreFaceletSerial = false) {
++        this.ignoreFaceletSerial = ignoreFaceletSerial;
++        this.hasLiveSerial = false;
+         this.serial = -1;
+         this.lastSerial = -1;
+         this.lastLocalTimestamp = null;
+@@ -938,6 +960,7 @@
+                 msg.set([0xDD, 0x04, 0x00, 0xEF, 0x00, 0x00]);
+                 break;
+             case 'REQUEST_RESET':
++                if (this.ignoreFaceletSerial) { this.hasLiveSerial = false; this.moveBuffer = []; }
+                 msg.set([0xD2, 0x0D, 0x05, 0x39, 0x77, 0x00, 0x00, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0x00, 0x00, 0x00]);
+                 break;
+             default:
+@@ -984,7 +1007,15 @@
+         }
+         // Probably something went wrong and buffer is no longer evicted, so forcibly disconnect the cube
+         if (conn && this.moveBuffer.length > 16) {
+-            conn.disconnect();
++            if (this.ignoreFaceletSerial) {
++                reportGanDiagnostic({ stage: 'recovery-resync', bufferedMoves: this.moveBuffer.length });
++                this.moveBuffer = [];
++                this.hasLiveSerial = false;
++                await conn.sendCommandMessage(this.createCommandMessage({ type: 'REQUEST_FACELETS' }));
++            } else {
++                reportGanDiagnostic({ stage: 'protocol-disconnect', reason: 'move-recovery-buffer-overflow', bufferedMoves: this.moveBuffer.length });
++                conn.disconnect();
++            }
+         }
+         return evictedEvents;
+     }
+@@ -1044,6 +1075,11 @@
+                 this.lastLocalTimestamp = timestamp;
+                 let cubeTimestamp = msg.getBitWord(16, 32, true);
+                 let serial = this.serial = msg.getBitWord(48, 16, true);
++                if (this.ignoreFaceletSerial && !this.hasLiveSerial) {
++                    this.lastSerial = (serial - 1) & 0xFF;
++                    this.hasLiveSerial = true;
++                    reportGanDiagnostic({ stage: 'live-counter-baseline', serial });
++                }
+                 let direction = msg.getBitWord(64, 2);
+                 let face = [2, 32, 8, 1, 16, 4].indexOf(msg.getBitWord(66, 6));
+                 let move = "URFDLB".charAt(face) + " '".charAt(direction);
+@@ -1089,9 +1125,10 @@
+             cubeEvents = await this.evictMoveBuffer();
+         }
+         else if (eventType == 0xED) { // FACELETS
+-            let serial = this.serial = msg.getBitWord(16, 16, true);
++            let serial = msg.getBitWord(16, 16, true);
++            if (!this.ignoreFaceletSerial) this.serial = serial;
+             // Also check and recovery missed moves using periodic facelets event sent by cube
+-            if (this.lastSerial != -1) {
++            if (this.lastSerial != -1 && !this.ignoreFaceletSerial) {
+                 // Debounce the facelet event if there are active cube moves
+                 if (this.lastLocalTimestamp != null && (timestamp - this.lastLocalTimestamp) > 500) {
+                     await this.checkIfMoveMissed(conn);
+@@ -1261,9 +1298,9 @@
   * @param customMacAddressProvider Optional custom provider for cube MAC address
   * @returns Object representing connection API and state
   */
@@ -61,6 +122,15 @@ diff --git a/node_modules/gan-web-bluetooth/dist/esm/index.mjs b/node_modules/ga
          filters: [
              { namePrefix: "GAN" },
              { namePrefix: "MG" },
+@@ -1311,7 +1348,7 @@
+             let stateCharacteristic = await service.getCharacteristic(GAN_GEN4_STATE_CHARACTERISTIC);
+             let key = GAN_ENCRYPTION_KEYS[0];
+             let encrypter = new GanGen4CubeEncrypter(new Uint8Array(key.key), new Uint8Array(key.iv), salt);
+-            let driver = new GanGen4ProtocolDriver();
++            let driver = new GanGen4ProtocolDriver(/^GANic4(?:_|$)/i.test(device.name || ''));
+             conn = await GanCubeClassicConnection.create(device, commandCharacteristic, stateCharacteristic, encrypter, driver);
+             break;
+         }
 diff --git a/node_modules/gan-web-bluetooth/dist/cjs/index.cjs b/node_modules/gan-web-bluetooth/dist/cjs/index.cjs
 --- a/node_modules/gan-web-bluetooth/dist/cjs/index.cjs
 +++ b/node_modules/gan-web-bluetooth/dist/cjs/index.cjs
@@ -112,7 +182,68 @@ diff --git a/node_modules/gan-web-bluetooth/dist/cjs/index.cjs b/node_modules/ga
      }
      async sendCubeCommand(command) {
          var commandMessage = this.driver.createCommandMessage(command);
-@@ -1263,9 +1283,9 @@
+@@ -918,7 +938,9 @@
+  *  - GAN14 ui FreePlay
+  */
+ class GanGen4ProtocolDriver {
+-    constructor() {
++    constructor(ignoreFaceletSerial = false) {
++        this.ignoreFaceletSerial = ignoreFaceletSerial;
++        this.hasLiveSerial = false;
+         this.serial = -1;
+         this.lastSerial = -1;
+         this.lastLocalTimestamp = null;
+@@ -940,6 +962,7 @@
+                 msg.set([0xDD, 0x04, 0x00, 0xEF, 0x00, 0x00]);
+                 break;
+             case 'REQUEST_RESET':
++                if (this.ignoreFaceletSerial) { this.hasLiveSerial = false; this.moveBuffer = []; }
+                 msg.set([0xD2, 0x0D, 0x05, 0x39, 0x77, 0x00, 0x00, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0x00, 0x00, 0x00]);
+                 break;
+             default:
+@@ -986,7 +1009,15 @@
+         }
+         // Probably something went wrong and buffer is no longer evicted, so forcibly disconnect the cube
+         if (conn && this.moveBuffer.length > 16) {
+-            conn.disconnect();
++            if (this.ignoreFaceletSerial) {
++                reportGanDiagnostic({ stage: 'recovery-resync', bufferedMoves: this.moveBuffer.length });
++                this.moveBuffer = [];
++                this.hasLiveSerial = false;
++                await conn.sendCommandMessage(this.createCommandMessage({ type: 'REQUEST_FACELETS' }));
++            } else {
++                reportGanDiagnostic({ stage: 'protocol-disconnect', reason: 'move-recovery-buffer-overflow', bufferedMoves: this.moveBuffer.length });
++                conn.disconnect();
++            }
+         }
+         return evictedEvents;
+     }
+@@ -1046,6 +1077,11 @@
+                 this.lastLocalTimestamp = timestamp;
+                 let cubeTimestamp = msg.getBitWord(16, 32, true);
+                 let serial = this.serial = msg.getBitWord(48, 16, true);
++                if (this.ignoreFaceletSerial && !this.hasLiveSerial) {
++                    this.lastSerial = (serial - 1) & 0xFF;
++                    this.hasLiveSerial = true;
++                    reportGanDiagnostic({ stage: 'live-counter-baseline', serial });
++                }
+                 let direction = msg.getBitWord(64, 2);
+                 let face = [2, 32, 8, 1, 16, 4].indexOf(msg.getBitWord(66, 6));
+                 let move = "URFDLB".charAt(face) + " '".charAt(direction);
+@@ -1091,9 +1127,10 @@
+             cubeEvents = await this.evictMoveBuffer();
+         }
+         else if (eventType == 0xED) { // FACELETS
+-            let serial = this.serial = msg.getBitWord(16, 16, true);
++            let serial = msg.getBitWord(16, 16, true);
++            if (!this.ignoreFaceletSerial) this.serial = serial;
+             // Also check and recovery missed moves using periodic facelets event sent by cube
+-            if (this.lastSerial != -1) {
++            if (this.lastSerial != -1 && !this.ignoreFaceletSerial) {
+                 // Debounce the facelet event if there are active cube moves
+                 if (this.lastLocalTimestamp != null && (timestamp - this.lastLocalTimestamp) > 500) {
+                     await this.checkIfMoveMissed(conn);
+@@ -1263,9 +1300,9 @@
   * @param customMacAddressProvider Optional custom provider for cube MAC address
   * @returns Object representing connection API and state
   */
@@ -124,6 +255,15 @@ diff --git a/node_modules/gan-web-bluetooth/dist/cjs/index.cjs b/node_modules/ga
          filters: [
              { namePrefix: "GAN" },
              { namePrefix: "MG" },
+@@ -1313,7 +1350,7 @@
+             let stateCharacteristic = await service.getCharacteristic(GAN_GEN4_STATE_CHARACTERISTIC);
+             let key = GAN_ENCRYPTION_KEYS[0];
+             let encrypter = new GanGen4CubeEncrypter(new Uint8Array(key.key), new Uint8Array(key.iv), salt);
+-            let driver = new GanGen4ProtocolDriver();
++            let driver = new GanGen4ProtocolDriver(/^GANic4(?:_|$)/i.test(device.name || ''));
+             conn = await GanCubeClassicConnection.create(device, commandCharacteristic, stateCharacteristic, encrypter, driver);
+             break;
+         }
 diff --git a/node_modules/gan-web-bluetooth/src/gan-smart-cube.ts b/node_modules/gan-web-bluetooth/src/gan-smart-cube.ts
 --- a/node_modules/gan-web-bluetooth/src/gan-smart-cube.ts
 +++ b/node_modules/gan-web-bluetooth/src/gan-smart-cube.ts
@@ -140,6 +280,15 @@ diff --git a/node_modules/gan-web-bluetooth/src/gan-smart-cube.ts b/node_modules
          {
              filters: [
                  { namePrefix: "GAN" },
+@@ -134,7 +134,7 @@
+             let stateCharacteristic = await service.getCharacteristic(def.GAN_GEN4_STATE_CHARACTERISTIC);
+             let key = def.GAN_ENCRYPTION_KEYS[0];
+             let encrypter = new GanGen4CubeEncrypter(new Uint8Array(key.key), new Uint8Array(key.iv), salt);
+-            let driver = new GanGen4ProtocolDriver();
++            let driver = new GanGen4ProtocolDriver(/^GANic4(?:_|$)/i.test(device.name || ''));
+             conn = await GanCubeClassicConnection.create(device, commandCharacteristic, stateCharacteristic, encrypter, driver);
+             break;
+         }
 diff --git a/node_modules/gan-web-bluetooth/src/gan-cube-protocol.ts b/node_modules/gan-web-bluetooth/src/gan-cube-protocol.ts
 --- a/node_modules/gan-web-bluetooth/src/gan-cube-protocol.ts
 +++ b/node_modules/gan-web-bluetooth/src/gan-cube-protocol.ts
@@ -193,6 +342,68 @@ diff --git a/node_modules/gan-web-bluetooth/src/gan-cube-protocol.ts b/node_modu
          }
      }
  
+@@ -787,6 +808,10 @@
+  */
+ class GanGen4ProtocolDriver implements GanProtocolDriver {
+ 
++    // GANic4 snapshots carry a zero counter even when live move counters are nonzero.
++    constructor(private ignoreFaceletSerial = false) {}
++    private hasLiveSerial = false;
++
+     private serial: number = -1;
+     private lastSerial: number = -1;
+     private lastLocalTimestamp: number | null = null;
+@@ -809,6 +834,7 @@
+                 msg.set([0xDD, 0x04, 0x00, 0xEF, 0x00, 0x00]);
+                 break;
+             case 'REQUEST_RESET':
++                if (this.ignoreFaceletSerial) { this.hasLiveSerial = false; this.moveBuffer = []; }
+                 msg.set([0xD2, 0x0D, 0x05, 0x39, 0x77, 0x00, 0x00, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0x00, 0x00, 0x00]);
+                 break;
+             default:
+@@ -856,7 +882,15 @@
+         }
+         // Probably something went wrong and buffer is no longer evicted, so forcibly disconnect the cube
+         if (conn && this.moveBuffer.length > 16) {
+-            conn.disconnect();
++            if (this.ignoreFaceletSerial) {
++                reportGanDiagnostic({ stage: 'recovery-resync', bufferedMoves: this.moveBuffer.length });
++                this.moveBuffer = [];
++                this.hasLiveSerial = false;
++                await conn.sendCommandMessage(this.createCommandMessage({ type: 'REQUEST_FACELETS' })!);
++            } else {
++                reportGanDiagnostic({ stage: 'protocol-disconnect', reason: 'move-recovery-buffer-overflow', bufferedMoves: this.moveBuffer.length });
++                conn.disconnect();
++            }
+         }
+         return evictedEvents;
+     }
+@@ -925,6 +959,11 @@
+                 this.lastLocalTimestamp = timestamp;
+                 let cubeTimestamp = msg.getBitWord(16, 32, true);
+                 let serial = this.serial = msg.getBitWord(48, 16, true);
++                if (this.ignoreFaceletSerial && !this.hasLiveSerial) {
++                    this.lastSerial = (serial - 1) & 0xFF;
++                    this.hasLiveSerial = true;
++                    reportGanDiagnostic({ stage: 'live-counter-baseline', serial });
++                }
+ 
+                 let direction = msg.getBitWord(64, 2);
+                 let face = [2, 32, 8, 1, 16, 4].indexOf(msg.getBitWord(66, 6));
+@@ -978,10 +1017,11 @@
+ 
+         } else if (eventType == 0xED) { // FACELETS
+ 
+-            let serial = this.serial = msg.getBitWord(16, 16, true);
++            let serial = msg.getBitWord(16, 16, true);
++            if (!this.ignoreFaceletSerial) this.serial = serial;
+ 
+             // Also check and recovery missed moves using periodic facelets event sent by cube
+-            if (this.lastSerial != -1) {
++            if (this.lastSerial != -1 && !this.ignoreFaceletSerial) {
+                 // Debounce the facelet event if there are active cube moves
+                 if (this.lastLocalTimestamp != null && (timestamp - this.lastLocalTimestamp) > 500) {
+                     await this.checkIfMoveMissed(conn);
 diff --git a/node_modules/gan-web-bluetooth/dist/types/gan-smart-cube.d.ts b/node_modules/gan-web-bluetooth/dist/types/gan-smart-cube.d.ts
 --- a/node_modules/gan-web-bluetooth/dist/types/gan-smart-cube.d.ts
 +++ b/node_modules/gan-web-bluetooth/dist/types/gan-smart-cube.d.ts
@@ -205,3 +416,17 @@ diff --git a/node_modules/gan-web-bluetooth/dist/types/gan-smart-cube.d.ts b/nod
  export type { MacAddressProvider, GanCubeConnection, GanCubeCommand, GanCubeEvent, GanCubeMove };
  export { connectGanCube };
  //# sourceMappingURL=gan-smart-cube.d.ts.map
+\ No newline at end of file
+diff --git a/node_modules/gan-web-bluetooth/dist/types/gan-cube-protocol.d.ts b/node_modules/gan-web-bluetooth/dist/types/gan-cube-protocol.d.ts
+--- a/node_modules/gan-web-bluetooth/dist/types/gan-cube-protocol.d.ts
++++ b/node_modules/gan-web-bluetooth/dist/types/gan-cube-protocol.d.ts
+@@ -231,6 +231,9 @@
+  *  - GAN14 ui FreePlay
+  */
+ declare class GanGen4ProtocolDriver implements GanProtocolDriver {
++    private ignoreFaceletSerial;
++    private hasLiveSerial;
++    constructor(ignoreFaceletSerial?: boolean);
+     private serial;
+     private lastSerial;
+     private lastLocalTimestamp;

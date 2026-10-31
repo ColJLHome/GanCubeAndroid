@@ -10,7 +10,8 @@ export function errorDetails(error: unknown): unknown {
   return error;
 }
 /** Bounded, tab-local diagnostics. Batch storage writes to avoid slowing Bluetooth events. */
-export function createDebugLog(onChange: () => void) {
+export function createDebugLog(onChange: () => void, initiallyEnabled = true) {
+  let enabled = initiallyEnabled;
   let lines: string[] = [];
   let pending: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -22,8 +23,15 @@ export function createDebugLog(onChange: () => void) {
     pending = undefined;
     try { sessionStorage.setItem(KEY, JSON.stringify(lines)); } catch { /* Keep memory log. */ }
   }
+  if (!enabled) { lines = []; flush(); }
   return {
+    setEnabled(value: boolean) {
+      enabled = value;
+      if (!enabled) { lines = []; flush(); }
+      onChange();
+    },
     add(level: LogLevel, message: string, details?: unknown) {
+      if (!enabled) return;
       let suffix = '';
       if (details !== undefined) {
         try { suffix = ` ${JSON.stringify(details)}`; } catch { suffix = ' [unserializable details]'; }

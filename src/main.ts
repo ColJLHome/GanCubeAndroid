@@ -3,7 +3,7 @@ import type { Subscription } from 'rxjs';
 import './style.css';
 import { SOLVED, applyMove, cubeSvg } from './cube';
 import { createTimer, formatTime } from './timer';
-import { listTimings, saveTiming, type TimingRecord } from './database';
+import { databaseRequest, listTimings, saveTiming, type TimingRecord } from './database';
 import { createDebugLog, errorDetails } from './debug-log';
 import { loadCube, saveCube, findSavedDevice, validMac, restoreCube } from './saved-cube';
 import { bluetoothSupportIssue } from './bluetooth-support';
@@ -29,8 +29,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <p id="message" role="alert"></p>
     <details class="advanced"><summary>Bluetooth address / advanced</summary><label for="mac">Cube MAC address (optional)</label><input id="mac" placeholder="AA:BB:CC:DD:EE:FF" spellcheck="false" autocomplete="off" aria-describedby="mac-help"><p id="mac-help">Used to decrypt cube data. Leave blank to try automatic detection. If prompted, find the Bluetooth MAC in CubeStation’s device information or a BLE scanner. This is not the browser’s device ID.</p></details>
   </section>
+  <section class="panel debugging-panel" aria-labelledby="debugging-title"><div class="panel-top"><h2 id="debugging-title">Debugging</h2><button id="toggle-debugging" type="button" role="switch" aria-checked="true" aria-describedby="debugging-help">Disable debugging</button></div><p id="debugging-help">Disabling debugging clears the log and stops recording new entries.</p><p id="debugging-feedback" role="status"></p></section>
   <aside><h2>Before you connect</h2><ol><li>Enable Bluetooth on your computer.</li><li>Turn a face to wake your cube and keep it nearby.</li><li>Disconnect CubeStation and other cube apps.</li><li>Select your GAN cube in the browser’s device chooser.</li></ol><p>Use Chrome or Edge with Web Bluetooth support on localhost or HTTPS. Browser and operating system support varies.</p></aside></section>
-  <section id="log-screen" aria-labelledby="log-title" hidden><p class="eyebrow">CONNECTION DIAGNOSTICS</p><h1 id="log-title">Debug log.</h1><p class="intro">Connection attempts, cube events, and errors. The latest 500 entries stay in this tab across reloads.</p><div class="log-actions"><button id="copy-log" type="button">Copy log</button><button id="clear-log" type="button" class="secondary">Clear log</button></div><p id="log-feedback" role="status"></p><label for="log-output">Timestamped debug log</label><textarea id="log-output" readonly spellcheck="false" wrap="off"></textarea></section>
+  <section id="log-screen" aria-labelledby="log-title" hidden><p class="eyebrow">CONNECTION DIAGNOSTICS</p><h1 id="log-title">Debug log.</h1><p class="intro">Connection attempts, cube events, and errors. The latest 500 entries stay in this tab across reloads.</p><p id="logging-state" role="status"></p><div class="log-actions"><button id="copy-log" type="button">Copy log</button><button id="clear-log" type="button" class="secondary">Clear log</button></div><p id="log-feedback" role="status"></p><label for="log-output">Timestamped debug log</label><textarea id="log-output" readonly spellcheck="false" wrap="off"></textarea></section>
   </main><footer>GAN CUBE <span>BLUETOOTH LE</span></footer>
   <dialog id="mac-dialog"><form id="mac-form"><h2>Enter your cube’s address</h2><p>Automatic detection wasn’t available. Enter the cube’s Bluetooth MAC address to finish connecting.</p><label for="fallback-mac">Bluetooth MAC address</label><input id="fallback-mac" placeholder="AA:BB:CC:DD:EE:FF" required pattern="([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}" autocomplete="off" spellcheck="false"><div class="dialog-actions"><button type="button" id="cancel" class="secondary">Cancel</button><button type="submit">Continue</button></div></form></dialog>`;
 
@@ -40,19 +41,70 @@ const disconnect = el<HTMLButtonElement>('disconnect');
 const reset = el<HTMLButtonElement>('reset-cube');
 const mac = el<HTMLInputElement>('mac');
 const dialog = el<HTMLDialogElement>('mac-dialog');
+const debugPreferenceKey = 'gancube.debugging.v1';
+let debuggingEnabled = true;
+let cachedDebugPreference: boolean | null = null;
+try {
+  const value = JSON.parse(localStorage.getItem(debugPreferenceKey) ?? 'null');
+  if (typeof value === 'boolean') cachedDebugPreference = debuggingEnabled = value;
+} catch { /* Default to the existing enabled behaviour. */ }
+let debugPreferenceChanged = false;
 let logRenderPending = false;
 const debugLog = createDebugLog(() => {
   // Batch fast move bursts and avoid rendering the hidden log screen.
   if (location.hash !== '#log' || logRenderPending) return;
   logRenderPending = true;
   queueMicrotask(() => { logRenderPending = false; renderLog(); });
-});
+}, debuggingEnabled);
 function renderLog() {
   const output = el<HTMLTextAreaElement>('log-output');
   const atBottom = output.scrollTop + output.clientHeight >= output.scrollHeight - 24;
   output.value = debugLog.text();
   if (atBottom) output.scrollTop = output.scrollHeight;
 }
+function updateDebuggingControls() {
+  const toggle = el<HTMLButtonElement>('toggle-debugging');
+  toggle.setAttribute('aria-checked', String(debuggingEnabled));
+  toggle.textContent = debuggingEnabled ? 'Disable debugging' : 'Enable debugging';
+  el('logging-state').textContent = debuggingEnabled ? 'Debugging enabled.' : 'Debugging disabled. Enable it in Settings to record new entries.';
+}
+updateDebuggingControls();
+async function persistDebugging() {
+  try {
+    await databaseRequest('settings/debugging', { method: 'PUT', body: JSON.stringify({ enabled: debuggingEnabled }) });
+    el('debugging-feedback').textContent = 'Setting saved.';
+  } catch {
+    el('debugging-feedback').textContent = 'Applied for this browser. Could not save to SQLite; check the API server.';
+  }
+}
+el('toggle-debugging').addEventListener('click', async () => {
+  debugPreferenceChanged = true;
+  debuggingEnabled = !debuggingEnabled;
+  try { localStorage.setItem(debugPreferenceKey, JSON.stringify(debuggingEnabled)); } catch { /* Apply in memory. */ }
+  debugLog.setEnabled(debuggingEnabled);
+  renderLog();
+  el('log-feedback').textContent = '';
+  updateDebuggingControls();
+  if (debuggingEnabled) debugLog.add('INFO', 'Debugging enabled');
+  const button = el<HTMLButtonElement>('toggle-debugging');
+  button.disabled = true;
+  await persistDebugging();
+  button.disabled = false;
+});
+// Restore SQLite preferences for a fresh browser; cached choices also work offline.
+void (async () => {
+  if (cachedDebugPreference !== null) { await persistDebugging(); return; }
+  try {
+    const saved = await databaseRequest<{ enabled: boolean } | null>('settings/debugging');
+    if (!debugPreferenceChanged && typeof saved?.enabled === 'boolean') {
+      debuggingEnabled = saved.enabled;
+      try { localStorage.setItem(debugPreferenceKey, JSON.stringify(debuggingEnabled)); } catch { /* Optional cache. */ }
+      debugLog.setEnabled(debuggingEnabled);
+      renderLog();
+      updateDebuggingControls();
+    }
+  } catch { /* Keep the current choice when API access is unavailable. */ }
+})();
 el('clear-log').addEventListener('click', () => {
   debugLog.clear();
   renderLog();
@@ -70,7 +122,7 @@ el('copy-log').addEventListener('click', async () => {
 });
 window.addEventListener('gan-cube-diagnostic', event => {
   const detail = (event as CustomEvent).detail;
-  debugLog.add(detail?.stage === 'decode-error' ? 'ERROR' : detail?.stage === 'short-packet' ? 'WARN' : 'INFO', 'Bluetooth packet', detail);
+  debugLog.add(detail?.stage === 'decode-error' ? 'ERROR' : ['short-packet', 'recovery-resync', 'protocol-disconnect'].includes(detail?.stage) ? 'WARN' : 'INFO', 'Bluetooth packet', detail);
 });
 window.addEventListener('error', event => debugLog.add('ERROR', 'Unhandled JavaScript error', errorDetails(event.error ?? event.message)));
 window.addEventListener('unhandledrejection', event => debugLog.add('ERROR', 'Unhandled promise rejection', errorDetails(event.reason)));
@@ -90,12 +142,30 @@ const pendingKey = 'gancube.pendingTimings.v1';
 let pendingTimings: TimingRecord[] = [];
 try {
   const pending = JSON.parse(localStorage.getItem(pendingKey) ?? '[]');
-  if (Array.isArray(pending)) pendingTimings = pending.filter(row => row && typeof row.id === 'string' && typeof row.durationMs === 'number');
+  if (Array.isArray(pending)) pendingTimings = pending.filter(row => row && typeof row.id === 'string' && typeof row.durationMs === 'number' && row.outcome === 'solved');
 } catch { /* Database remains available if browser storage is disabled. */ }
 function cachePending() {
   try { localStorage.setItem(pendingKey, JSON.stringify(pendingTimings)); }
   catch { debugLog.add('WARN', 'Pending timings could not be cached in browser storage'); }
 }
+// Render locally completed solves immediately, independently of API latency.
+const timingHistory = new Map(pendingTimings.map(record => [record.id, record]));
+function renderTimings() {
+  const rows = el('timing-rows');
+  rows.replaceChildren();
+  const records = [...timingHistory.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt) || b.finishedAt.localeCompare(a.finishedAt)).slice(0, 20);
+  const pendingIds = new Set(pendingTimings.map(record => record.id));
+  for (const record of records) {
+    const row = document.createElement('tr');
+    for (const value of [new Date(record.startedAt).toLocaleString(), formatTime(record.durationMs), pendingIds.has(record.id) ? 'Solved · Pending save' : 'Solved', record.cubeName ?? '—']) {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      row.append(cell);
+    }
+    rows.append(row);
+  }
+}
+renderTimings();
 let historyBusy = false;
 async function refreshTimings() {
   if (historyBusy) return;
@@ -107,26 +177,19 @@ async function refreshTimings() {
       await saveTiming(record);
       pendingTimings = pendingTimings.filter(item => item.id !== record.id);
       cachePending();
+      renderTimings();
       debugLog.add('INFO', 'Timing saved to SQLite', { id: record.id, durationMs: record.durationMs, outcome: record.outcome });
     }
     const records = await listTimings();
-    const rows = el('timing-rows');
-    rows.replaceChildren();
     for (const record of records) {
-      const row = document.createElement('tr');
-      const outcome = { solved: 'Solved', manual: 'Manual stop', reset: 'Reset', interrupted: 'Interrupted' }[record.outcome];
-      for (const value of [new Date(record.startedAt).toLocaleString(), formatTime(record.durationMs), outcome, record.cubeName ?? '—']) {
-        const cell = document.createElement('td');
-        cell.textContent = value;
-        row.append(cell);
-      }
-      rows.append(row);
+      if (record.outcome === 'solved') timingHistory.set(record.id, record);
     }
+    renderTimings();
     completed = true;
-    el('history-message').textContent = records.length ? 'Latest 20 runs · Saved in SQLite' : 'No timings yet. Start the timer to record a run.';
+    el('history-message').textContent = pendingTimings.length ? `${pendingTimings.length} solved timing(s) waiting to save.` : timingHistory.size ? 'Latest 20 solves · Saved in SQLite' : 'No solves yet. Start the timer and solve the cube to record a time.';
   } catch (error) {
     debugLog.add('ERROR', 'Timing database unavailable', errorDetails(error));
-    el('history-message').textContent = `Could not access SQLite. ${pendingTimings.length ? `${pendingTimings.length} timing(s) waiting to save. ` : ''}Start the API with npm run dev, then retry.`;
+    el('history-message').textContent = `Could not access SQLite. ${pendingTimings.length ? `${pendingTimings.length} solved timing(s) waiting to save. ` : ''}Start the API with npm run dev, then retry.`;
   } finally {
     historyBusy = false;
     el<HTMLButtonElement>('refresh-timings').disabled = false;
@@ -135,8 +198,13 @@ async function refreshTimings() {
 }
 el('refresh-timings').addEventListener('click', () => { void refreshTimings(); });
 const timer = createTimer(el<HTMLButtonElement>('solve-timer'), el('timer-message'), record => {
-  pendingTimings.push({ ...record, ...runCube });
+  if (record.outcome !== 'solved') return;
+  const timing = { ...record, ...runCube };
+  pendingTimings.push(timing);
+  timingHistory.set(timing.id, timing);
   cachePending();
+  renderTimings();
+  el('history-message').textContent = `${pendingTimings.length} solved timing(s) waiting to save.`;
   void refreshTimings();
 }, () => { runCube = { cubeId: selectedDevice?.id, cubeName: connection?.deviceName }; });
 let facelets: string | undefined;
@@ -236,9 +304,9 @@ function requestMac(): Promise<string | null> {
 }
 el('cancel').addEventListener('click', () => dialog.close(''));
 
-async function connectCube(reconnect = false) {
+async function connectCube(reconnect = false, automatic = false) {
   if (busy || connection || !supported) return;
-  debugLog.add('INFO', 'Connection requested', { reconnect, savedCube: savedCube?.name });
+  debugLog.add('INFO', 'Connection requested', { reconnect, automatic, savedCube: savedCube?.name });
   moveCount = 0;
   lastMoveAt = undefined;
   el('message').textContent = '';
@@ -260,7 +328,7 @@ async function connectCube(reconnect = false) {
       if (!knownDevice) {
         clearSession('Your saved cube needs browser permission. Click Choose cube in Settings to select it again.');
         el('cube-caption').textContent = 'Saved cube unavailable · Open Settings and choose your cube again.';
-        location.hash = '#settings';
+        if (!automatic) location.hash = '#settings';
         return;
       }
     }
@@ -306,7 +374,7 @@ async function connectCube(reconnect = false) {
       if (event.type === 'MOVE') { moveCount++; lastMoveAt = performance.now(); }
       if (event.type !== 'GYRO') debugLog.add(event.type === 'DISCONNECT' ? 'WARN' : 'INFO', `Cube event: ${event.type}`, event);
       if (event.type === 'DISCONNECT') {
-        clearSession('Connection lost: the browser reported a Bluetooth disconnect. Wake your cube and reconnect.');
+        clearSession(selectedDevice?.gatt?.connected ? 'Connection ended by the cube protocol driver. Check Log for the reason, then reconnect.' : 'Connection lost: the browser reported a Bluetooth disconnect. Wake your cube and reconnect.');
         el('cube-caption').textContent = 'Bluetooth connection lost. Click Disconnected to reconnect.';
         return;
       }
@@ -416,3 +484,5 @@ if (!supported) {
 }
 
 void refreshTimings();
+
+if (savedCube && supported) void connectCube(true, true);

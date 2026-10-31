@@ -32,7 +32,7 @@ export function createTimer(button: HTMLButtonElement, message: HTMLElement, onF
     if (run) {
       const result = { ...run, finishedAt: new Date().toISOString(), durationMs: Math.round(elapsed), outcome };
       run = undefined;
-      onFinish?.(result);
+      if (outcome === 'solved') onFinish?.(result);
     }
   }
   button.addEventListener('click', () => {

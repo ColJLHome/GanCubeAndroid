@@ -5,10 +5,24 @@ const { connectGanCube } = vi.hoisted(() => ({ connectGanCube: vi.fn() }));
 vi.mock('gan-web-bluetooth', () => ({ connectGanCube }));
 const click = (id: string) => document.getElementById(id)!.click();
 const text = (id: string) => document.getElementById(id)!.textContent;
+let appListeners: Array<[string, EventListenerOrEventListenerObject]> = [];
+function unloadApp() {
+  window.dispatchEvent(new Event('pagehide'));
+  for (const [type, listener] of appListeners) window.removeEventListener(type, listener);
+  appListeners = [];
+}
 beforeEach(async () => {
+  vi.restoreAllMocks();
   vi.resetModules();
   vi.resetAllMocks();
+  appListeners = [];
+  const addListener = window.addEventListener.bind(window);
+  vi.spyOn(window, 'addEventListener').mockImplementation((type, listener, options) => {
+    if (listener) appListeners.push([type, listener]);
+    addListener(type, listener, options);
+  });
   localStorage.clear();
+  sessionStorage.clear();
   vi.stubGlobal('fetch', vi.fn(async (_url: string, options?: RequestInit) => ({
     ok: true,
     json: async () => options?.method === 'PUT' ? JSON.parse(String(options.body)) : String(_url).includes('timings') ? [] : null,
@@ -18,7 +32,7 @@ beforeEach(async () => {
   document.body.innerHTML = '<div id="app"></div>';
   await import('../src/main');
 });
-afterEach(() => click('disconnect'));
+afterEach(() => { click('disconnect'); unloadApp(); vi.restoreAllMocks(); });
 test('cancellation allows another connection attempt', async () => {
   connectGanCube.mockRejectedValue(new DOMException('Cancelled', 'NotFoundError'));
   click('connect');
@@ -121,6 +135,7 @@ test('failed reset retains the existing drawing and allows retry', async () => {
 });
 const saved = { id: 'cube-1', name: 'GAN remembered', mac: 'AA:BB:CC:DD:EE:FF' };
 async function reloadApp() {
+  unloadApp();
   vi.resetModules();
   document.body.innerHTML = '<div id="app"></div>';
   await import('../src/main');
@@ -142,22 +157,21 @@ test('saves a selected cube and reconnects to that device in the same tab', asyn
   await vi.waitFor(() => expect(connectGanCube).toHaveBeenCalledTimes(2));
   expect(connectGanCube.mock.calls[1][1]).toBe(device);
 });
-test('restores saved settings after reload and uses the exact permitted device', async () => {
+test('startup restores saved settings and automatically reconnects to the exact permitted device', async () => {
   localStorage.setItem('gancube.lastCube.v1', JSON.stringify(saved));
   const device = { id: saved.id, gatt: { disconnect: vi.fn() } };
   const getDevices = vi.fn(async () => [{ id: 'other', name: saved.name }, device]);
   Object.defineProperty(navigator, 'bluetooth', { value: { getDevices }, configurable: true });
-  await reloadApp();
-  expect(text('cube-label')).toBe(saved.name);
-  expect((document.getElementById('mac') as HTMLInputElement).value).toBe(saved.mac);
   connectGanCube.mockImplementation(async (provider, knownDevice) => {
     expect(knownDevice).toBe(device);
     expect(await provider(device, false)).toBe(saved.mac);
     return { deviceName: saved.name, deviceMAC: saved.mac, events$: new Subject(), sendCubeCommand: vi.fn(async () => {}), disconnect: vi.fn(async () => {}) };
   });
-  click('live-badge');
-  click('live-badge');
-  await vi.waitFor(() => expect(connectGanCube).toHaveBeenCalledTimes(1));
+  await reloadApp();
+  await vi.waitFor(() => expect(text('live-badge')).toBe('Connected'));
+  expect(text('cube-label')).toBe(saved.name);
+  expect((document.getElementById('mac') as HTMLInputElement).value).toBe(saved.mac);
+  expect(connectGanCube).toHaveBeenCalledTimes(1);
   expect(getDevices).toHaveBeenCalledTimes(1);
 });
 test('lost permission offers a chooser in Settings without replacing saved settings', async () => {
@@ -273,6 +287,7 @@ test('completed solves are saved to SQLite API and displayed in recent timings',
   click('solve-timer');
   events$.next({ type: 'MOVE', move: "R'" });
   await vi.waitFor(() => expect(text('timing-rows')).toContain('Solved'));
+  await vi.waitFor(() => expect(JSON.parse(localStorage.getItem('gancube.pendingTimings.v1')!)).toEqual([]));
   expect(records).toHaveLength(1);
   expect(records[0]).toMatchObject({ cubeName: 'GAN test', outcome: 'solved' });
   expect(records[0].durationMs).toBeGreaterThanOrEqual(0);
@@ -285,14 +300,58 @@ test('offline timings are retained for retry and saved once the API returns', as
   await vi.waitFor(() => expect(events$.observed).toBe(true));
   events$.next({ type: 'FACELETS', facelets: 'UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB' });
   vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('API offline'); }));
+  events$.next({ type: 'MOVE', move: 'R' });
   click('solve-timer');
-  click('solve-timer');
-  await vi.waitFor(() => expect(text('history-message')).toContain('waiting to save'));
+  events$.next({ type: 'MOVE', move: "R'" });
+  expect(text('timing-rows')).toContain('Solved · Pending save');
+  await vi.waitFor(() => expect(text('history-message')).toContain('Could not access SQLite'));
   const pending = JSON.parse(localStorage.getItem('gancube.pendingTimings.v1')!);
   expect(pending).toHaveLength(1);
-  expect(pending[0].outcome).toBe('manual');
+  expect(pending[0].outcome).toBe('solved');
   vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('timings?') ? pending : {} })));
   click('refresh-timings');
-  await vi.waitFor(() => expect(text('timing-rows')).toContain('Manual stop'));
-  expect(JSON.parse(localStorage.getItem('gancube.pendingTimings.v1')!)).toEqual([]);
+  await vi.waitFor(() => expect(JSON.parse(localStorage.getItem('gancube.pendingTimings.v1')!)).toEqual([]));
+  expect(text('timing-rows')).toContain('Solved');
+  expect(text('timing-rows')).not.toContain('Pending save');
+});
+test('a solved timing appears before the database responds and survives a stale history response', async () => {
+  const events$ = new Subject<any>();
+  connectGanCube.mockResolvedValue({ deviceName: 'GAN test', events$, sendCubeCommand: vi.fn(async () => {}), disconnect: vi.fn(async () => {}) });
+  click('connect');
+  await vi.waitFor(() => expect(events$.observed).toBe(true));
+  let finishSave!: () => void;
+  const pendingSave = new Promise<void>(resolve => { finishSave = resolve; });
+  vi.stubGlobal('fetch', vi.fn(async (_url: string, options?: RequestInit) => {
+    if (options?.method === 'POST') await pendingSave;
+    return { ok: true, json: async () => [] };
+  }));
+  events$.next({ type: 'FACELETS', facelets: 'UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB' });
+  events$.next({ type: 'MOVE', move: 'R' });
+  click('solve-timer');
+  events$.next({ type: 'MOVE', move: "R'" });
+  expect(text('timing-rows')).toContain('Solved · Pending save');
+  finishSave();
+  await vi.waitFor(() => expect(text('history-message')).toContain('Saved in SQLite'));
+  expect(text('timing-rows')).toContain('Solved');
+  expect(text('timing-rows')).not.toContain('Pending save');
+});
+test('debugging toggle clears the log immediately and suppresses packets until re-enabled', async () => {
+  location.hash = '#log';
+  window.dispatchEvent(new HashChangeEvent('hashchange'));
+  window.dispatchEvent(new CustomEvent('gan-cube-diagnostic', { detail: { stage: 'notification', bytes: 20 } }));
+  await vi.waitFor(() => expect((document.getElementById('log-output') as HTMLTextAreaElement).value).toContain('Bluetooth packet'));
+  click('toggle-debugging');
+  expect(document.getElementById('toggle-debugging')!.getAttribute('aria-checked')).toBe('false');
+  expect((document.getElementById('log-output') as HTMLTextAreaElement).value).toBe('');
+  window.dispatchEvent(new CustomEvent('gan-cube-diagnostic', { detail: { stage: 'decode-error', error: 'ignored while disabled' } }));
+  await vi.waitFor(() => expect((document.getElementById('toggle-debugging') as HTMLButtonElement).disabled).toBe(false));
+  expect((document.getElementById('log-output') as HTMLTextAreaElement).value).toBe('');
+  expect(JSON.parse(sessionStorage.getItem('gancube.debugLog.v1')!)).toEqual([]);
+  expect(fetch).toHaveBeenCalledWith('/api/settings/debugging', expect.objectContaining({ method: 'PUT', body: '{"enabled":false}' }));
+  await reloadApp();
+  expect(document.getElementById('toggle-debugging')!.getAttribute('aria-checked')).toBe('false');
+  expect((document.getElementById('log-output') as HTMLTextAreaElement).value).toBe('');
+  await vi.waitFor(() => expect((document.getElementById('toggle-debugging') as HTMLButtonElement).disabled).toBe(false));
+  click('toggle-debugging');
+  await vi.waitFor(() => expect((document.getElementById('log-output') as HTMLTextAreaElement).value).toContain('Debugging enabled'));
 });
