@@ -1,0 +1,207 @@
+diff --git a/node_modules/gan-web-bluetooth/dist/esm/index.mjs b/node_modules/gan-web-bluetooth/dist/esm/index.mjs
+--- a/node_modules/gan-web-bluetooth/dist/esm/index.mjs
++++ b/node_modules/gan-web-bluetooth/dist/esm/index.mjs
+@@ -413,15 +413,32 @@
+ /**
+  * Implementation of classic command/response connection with GAN Smart Cube device
+  */
++// Transport diagnostics let applications observe packets the protocol driver ignores.
++function reportGanDiagnostic(detail) {
++    try {
++        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('gan-cube-diagnostic', { detail }));
++    } catch { /* Diagnostics must not interfere with Bluetooth. */ }
++}
++
+ class GanCubeClassicConnection {
+     constructor(device, commandCharacteristic, stateCharacteristic, encrypter, driver) {
++        this.writeQueue = Promise.resolve();
+         this.onStateUpdate = async (evt) => {
+             var characteristic = evt.target;
+             var eventMessage = characteristic.value;
++            reportGanDiagnostic({ stage: 'notification', bytes: eventMessage?.byteLength ?? 0 });
+             if (eventMessage && eventMessage.byteLength >= 16) {
+-                var decryptedMessage = this.encrypter.decrypt(new Uint8Array(eventMessage.buffer));
+-                var cubeEvents = await this.driver.handleStateEvent(this, decryptedMessage);
+-                cubeEvents.forEach(e => this.events$.next(e));
++                try {
++                    var decryptedMessage = this.encrypter.decrypt(new Uint8Array(eventMessage.buffer, eventMessage.byteOffset, eventMessage.byteLength));
++                    var cubeEvents = await this.driver.handleStateEvent(this, decryptedMessage);
++                    reportGanDiagnostic({ stage: 'decoded', bytes: decryptedMessage.byteLength, opcode: decryptedMessage[0], events: cubeEvents.map(e => e.type), prefix: Array.from(decryptedMessage.slice(0, 20)).map(b => b.toString(16).padStart(2, '0')).join(' ') });
++                    cubeEvents.forEach(e => this.events$.next(e));
++                } catch (error) {
++                    reportGanDiagnostic({ stage: 'decode-error', error: String(error) });
++                    throw error;
++                }
++            } else {
++                reportGanDiagnostic({ stage: 'short-packet', bytes: eventMessage?.byteLength ?? 0 });
+             }
+         };
+         this.onDisconnect = async () => {
+@@ -453,7 +470,10 @@
+     }
+     async sendCommandMessage(message) {
+         var encryptedMessage = this.encrypter.encrypt(message);
+-        return this.commandCharacteristic.writeValue(encryptedMessage);
++        // Include driver-generated move recovery requests in the same GATT write queue.
++        const write = this.writeQueue.then(() => this.commandCharacteristic.writeValue(encryptedMessage));
++        this.writeQueue = write.catch(() => {});
++        return write;
+     }
+     async sendCubeCommand(command) {
+         var commandMessage = this.driver.createCommandMessage(command);
+@@ -1261,9 +1281,9 @@
+  * @param customMacAddressProvider Optional custom provider for cube MAC address
+  * @returns Object representing connection API and state
+  */
+-async function connectGanCube(customMacAddressProvider) {
++async function connectGanCube(customMacAddressProvider, knownDevice) {
+     // Request user for the bluetooth device (popup selection dialog)
+-    var device = await navigator.bluetooth.requestDevice({
++    var device = knownDevice || await navigator.bluetooth.requestDevice({
+         filters: [
+             { namePrefix: "GAN" },
+             { namePrefix: "MG" },
+diff --git a/node_modules/gan-web-bluetooth/dist/cjs/index.cjs b/node_modules/gan-web-bluetooth/dist/cjs/index.cjs
+--- a/node_modules/gan-web-bluetooth/dist/cjs/index.cjs
++++ b/node_modules/gan-web-bluetooth/dist/cjs/index.cjs
+@@ -415,15 +415,32 @@
+ /**
+  * Implementation of classic command/response connection with GAN Smart Cube device
+  */
++// Transport diagnostics let applications observe packets the protocol driver ignores.
++function reportGanDiagnostic(detail) {
++    try {
++        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('gan-cube-diagnostic', { detail }));
++    } catch { /* Diagnostics must not interfere with Bluetooth. */ }
++}
++
+ class GanCubeClassicConnection {
+     constructor(device, commandCharacteristic, stateCharacteristic, encrypter, driver) {
++        this.writeQueue = Promise.resolve();
+         this.onStateUpdate = async (evt) => {
+             var characteristic = evt.target;
+             var eventMessage = characteristic.value;
++            reportGanDiagnostic({ stage: 'notification', bytes: eventMessage?.byteLength ?? 0 });
+             if (eventMessage && eventMessage.byteLength >= 16) {
+-                var decryptedMessage = this.encrypter.decrypt(new Uint8Array(eventMessage.buffer));
+-                var cubeEvents = await this.driver.handleStateEvent(this, decryptedMessage);
+-                cubeEvents.forEach(e => this.events$.next(e));
++                try {
++                    var decryptedMessage = this.encrypter.decrypt(new Uint8Array(eventMessage.buffer, eventMessage.byteOffset, eventMessage.byteLength));
++                    var cubeEvents = await this.driver.handleStateEvent(this, decryptedMessage);
++                    reportGanDiagnostic({ stage: 'decoded', bytes: decryptedMessage.byteLength, opcode: decryptedMessage[0], events: cubeEvents.map(e => e.type), prefix: Array.from(decryptedMessage.slice(0, 20)).map(b => b.toString(16).padStart(2, '0')).join(' ') });
++                    cubeEvents.forEach(e => this.events$.next(e));
++                } catch (error) {
++                    reportGanDiagnostic({ stage: 'decode-error', error: String(error) });
++                    throw error;
++                }
++            } else {
++                reportGanDiagnostic({ stage: 'short-packet', bytes: eventMessage?.byteLength ?? 0 });
+             }
+         };
+         this.onDisconnect = async () => {
+@@ -455,7 +472,10 @@
+     }
+     async sendCommandMessage(message) {
+         var encryptedMessage = this.encrypter.encrypt(message);
+-        return this.commandCharacteristic.writeValue(encryptedMessage);
++        // Include driver-generated move recovery requests in the same GATT write queue.
++        const write = this.writeQueue.then(() => this.commandCharacteristic.writeValue(encryptedMessage));
++        this.writeQueue = write.catch(() => {});
++        return write;
+     }
+     async sendCubeCommand(command) {
+         var commandMessage = this.driver.createCommandMessage(command);
+@@ -1263,9 +1283,9 @@
+  * @param customMacAddressProvider Optional custom provider for cube MAC address
+  * @returns Object representing connection API and state
+  */
+-async function connectGanCube(customMacAddressProvider) {
++async function connectGanCube(customMacAddressProvider, knownDevice) {
+     // Request user for the bluetooth device (popup selection dialog)
+-    var device = await navigator.bluetooth.requestDevice({
++    var device = knownDevice || await navigator.bluetooth.requestDevice({
+         filters: [
+             { namePrefix: "GAN" },
+             { namePrefix: "MG" },
+diff --git a/node_modules/gan-web-bluetooth/src/gan-smart-cube.ts b/node_modules/gan-web-bluetooth/src/gan-smart-cube.ts
+--- a/node_modules/gan-web-bluetooth/src/gan-smart-cube.ts
++++ b/node_modules/gan-web-bluetooth/src/gan-smart-cube.ts
+@@ -77,10 +77,10 @@
+  * @param customMacAddressProvider Optional custom provider for cube MAC address
+  * @returns Object representing connection API and state
+  */
+-async function connectGanCube(customMacAddressProvider?: MacAddressProvider): Promise<GanCubeConnection> {
++async function connectGanCube(customMacAddressProvider?: MacAddressProvider, knownDevice?: BluetoothDevice): Promise<GanCubeConnection> {
+ 
+     // Request user for the bluetooth device (popup selection dialog)
+-    var device: BluetoothDeviceWithMAC = await navigator.bluetooth.requestDevice(
++    var device: BluetoothDeviceWithMAC = knownDevice || await navigator.bluetooth.requestDevice(
+         {
+             filters: [
+                 { namePrefix: "GAN" },
+diff --git a/node_modules/gan-web-bluetooth/src/gan-cube-protocol.ts b/node_modules/gan-web-bluetooth/src/gan-cube-protocol.ts
+--- a/node_modules/gan-web-bluetooth/src/gan-cube-protocol.ts
++++ b/node_modules/gan-web-bluetooth/src/gan-cube-protocol.ts
+@@ -187,7 +187,16 @@
+ /**
+  * Implementation of classic command/response connection with GAN Smart Cube device
+  */
++// Transport diagnostics let applications observe packets the protocol driver ignores.
++function reportGanDiagnostic(detail: Record<string, unknown>) {
++    try {
++        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('gan-cube-diagnostic', { detail }));
++    } catch { /* Diagnostics must not interfere with Bluetooth. */ }
++}
++
+ class GanCubeClassicConnection implements GanCubeConnection, GanCubeRawConnection {
++
++    private writeQueue: Promise<void> = Promise.resolve();
+ 
+     device: BluetoothDeviceWithMAC;
+     commandCharacteristic: BluetoothRemoteGATTCharacteristic;
+@@ -237,16 +246,28 @@
+ 
+     async sendCommandMessage(message: Uint8Array): Promise<void> {
+         var encryptedMessage = this.encrypter.encrypt(message);
+-        return this.commandCharacteristic.writeValue(encryptedMessage);
++        // Include driver-generated move recovery requests in the same GATT write queue.
++        const write = this.writeQueue.then(() => this.commandCharacteristic.writeValue(encryptedMessage));
++        this.writeQueue = write.catch(() => {});
++        return write;
+     }
+ 
+     onStateUpdate = async (evt: Event) => {
+         var characteristic = evt.target as BluetoothRemoteGATTCharacteristic;
+         var eventMessage = characteristic.value;
++        reportGanDiagnostic({ stage: 'notification', bytes: eventMessage?.byteLength ?? 0 });
+         if (eventMessage && eventMessage.byteLength >= 16) {
+-            var decryptedMessage = this.encrypter.decrypt(new Uint8Array(eventMessage.buffer));
+-            var cubeEvents = await this.driver.handleStateEvent(this, decryptedMessage);
+-            cubeEvents.forEach(e => this.events$.next(e));
++            try {
++                var decryptedMessage = this.encrypter.decrypt(new Uint8Array(eventMessage.buffer, eventMessage.byteOffset, eventMessage.byteLength));
++                var cubeEvents = await this.driver.handleStateEvent(this, decryptedMessage);
++                reportGanDiagnostic({ stage: 'decoded', bytes: decryptedMessage.byteLength, opcode: decryptedMessage[0], events: cubeEvents.map(e => e.type), prefix: Array.from(decryptedMessage.slice(0, 20)).map(b => b.toString(16).padStart(2, '0')).join(' ') });
++                cubeEvents.forEach(e => this.events$.next(e));
++            } catch (error) {
++                reportGanDiagnostic({ stage: 'decode-error', error: String(error) });
++                throw error;
++            }
++        } else {
++            reportGanDiagnostic({ stage: 'short-packet', bytes: eventMessage?.byteLength ?? 0 });
+         }
+     }
+ 
+diff --git a/node_modules/gan-web-bluetooth/dist/types/gan-smart-cube.d.ts b/node_modules/gan-web-bluetooth/dist/types/gan-smart-cube.d.ts
+--- a/node_modules/gan-web-bluetooth/dist/types/gan-smart-cube.d.ts
++++ b/node_modules/gan-web-bluetooth/dist/types/gan-smart-cube.d.ts
+@@ -12,7 +12,7 @@
+  * @param customMacAddressProvider Optional custom provider for cube MAC address
+  * @returns Object representing connection API and state
+  */
+-declare function connectGanCube(customMacAddressProvider?: MacAddressProvider): Promise<GanCubeConnection>;
++declare function connectGanCube(customMacAddressProvider?: MacAddressProvider, knownDevice?: BluetoothDevice): Promise<GanCubeConnection>;
+ export type { MacAddressProvider, GanCubeConnection, GanCubeCommand, GanCubeEvent, GanCubeMove };
+ export { connectGanCube };
+ //# sourceMappingURL=gan-smart-cube.d.ts.map
