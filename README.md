@@ -30,7 +30,6 @@ Use a systemd user service to start the production build automatically under you
 
 ```sh
 npm install
-npm run setup:tnoodle
 npm run build
 mkdir -p ~/.config/systemd/user
 command -v node
@@ -56,7 +55,7 @@ RestartSec=5
 WantedBy=default.target
 ```
 
-The working directory is required to find `dist`, the TNoodle runtime, and the default `data/gancube.sqlite` database. Your user must be able to write to the project’s `data` and `.runtime/tnoodle` directories. Run TNoodle setup in this same checkout before starting the service. If you use a custom Java executable, add `Environment="JAVA=/absolute/path/to/java"` to `[Service]`; the service does not inherit variables from your interactive shell. You can similarly set `GANCUBE_DB_PATH` to an absolute database path.
+The working directory is required to find `dist` and the default `data/gancube.sqlite` database. Your user must be able to write to the project’s `data` directory. To store the database elsewhere, add `Environment="GANCUBE_DB_PATH=/absolute/path/to/gancube.sqlite"` to `[Service]`. The service does not inherit variables from your interactive shell.
 
 Enable and start the service:
 
