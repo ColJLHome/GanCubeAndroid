@@ -63,6 +63,8 @@ test('timings are listed newest first with a bounded result count', async () => 
   await write('/api/timings', 'POST', older);
   await write('/api/timings', 'POST', newer);
   expect(await (await fetch(url + '/api/timings?limit=1')).json()).toEqual([newer]);
+  expect(await (await fetch(url + '/api/timings?limit=1&offset=1')).json()).toEqual([older]);
+  expect(await (await fetch(url + '/api/timings?limit=1&offset=2')).json()).toEqual([]);
 });
 
 test('unfinished timings cannot be added and old unfinished runs are hidden', async () => {

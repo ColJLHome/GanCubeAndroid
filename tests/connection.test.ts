@@ -393,3 +393,31 @@ test('disconnect cancels guided scrambling and disables timing', async () => {
   expect(text('scramble-next')).toBe('—');
   expect((document.getElementById('solve-timer') as HTMLButtonElement).disabled).toBe(true);
 });
+
+test('timings page paginates all history and changing page size resets to the first page', async () => {
+  const records = Array.from({ length: 45 }, (_, i) => ({
+    id: `history-${i}`, startedAt: new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString(),
+    finishedAt: new Date(Date.UTC(2026, 0, 1, 0, i, 10)).toISOString(),
+    durationMs: (i + 1) * 1000, outcome: 'solved', cubeName: `Cube ${i}`, initialFacelets: '',
+  }));
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => records })));
+  click('refresh-timings');
+  await vi.waitFor(() => expect(text('timings-page-status')).toContain('45 solves'));
+  expect(document.querySelectorAll('#timing-rows tr')).toHaveLength(20);
+  expect(text('cube-timing-mean')).toBe(text('timing-mean'));
+  click('timings-next');
+  expect(text('timings-page-status')).toContain('Page 2 of 3');
+  expect(text('timing-rows')).toContain('Cube 24');
+  expect(text('cube-timing-mean')).not.toBe(text('timing-mean'));
+  click('timings-next');
+  expect(document.querySelectorAll('#timing-rows tr')).toHaveLength(5);
+  expect((document.getElementById('timings-next') as HTMLButtonElement).disabled).toBe(true);
+  click('timings-back');
+  expect(text('timings-page-status')).toContain('Page 2 of 3');
+  const select = document.getElementById('timings-page-size') as HTMLSelectElement;
+  select.value = '50';
+  select.dispatchEvent(new Event('change'));
+  expect(text('timings-page-status')).toContain('Page 1 of 1');
+  expect(document.querySelectorAll('#timing-rows tr')).toHaveLength(45);
+  expect((document.getElementById('timings-back') as HTMLButtonElement).disabled).toBe(true);
+});

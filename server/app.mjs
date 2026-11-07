@@ -137,9 +137,10 @@ export function createApp(databasePath, { scrambleService = createScrambleServic
   });
   app.get('/api/timings', (req, res) => {
     const limit = Math.min(500, Math.max(1, Number.parseInt(String(req.query.limit ?? '20'), 10) || 20));
+    const offset = Math.max(0, Number.parseInt(String(req.query.offset ?? '0'), 10) || 0);
     const rows = db.prepare(`SELECT id, started_at AS startedAt, finished_at AS finishedAt,
       duration_ms AS durationMs, outcome, cube_id AS cubeId, cube_name AS cubeName,
-      initial_facelets AS initialFacelets FROM timings WHERE outcome = 'solved' ORDER BY started_at DESC, rowid DESC LIMIT ?`).all(limit);
+      initial_facelets AS initialFacelets FROM timings WHERE outcome = 'solved' ORDER BY started_at DESC, rowid DESC LIMIT ? OFFSET ?`).all(limit, offset);
     res.json(rows);
   });
   app.post('/api/timings', (req, res) => {
