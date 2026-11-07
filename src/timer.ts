@@ -11,13 +11,14 @@ export function formatTime(milliseconds: number): string {
 /** Uses the monotonic clock; display refreshes never determine elapsed time. */
 export function createTimer(button: HTMLButtonElement, message: HTMLElement, onFinish?: (record: TimingRecord) => void, onStart?: () => void) {
   let state: string | undefined;
+  let blocked = false;
   let startedAt: number | undefined;
   let elapsed = 0;
   let run: Pick<TimingRecord, 'id' | 'startedAt' | 'initialFacelets'> | undefined;
   let hasBeenUnsolved = false;
   let interval: ReturnType<typeof setInterval> | undefined;
   function render() {
-    button.disabled = !state;
+    button.disabled = !state || blocked;
     const time = formatTime(startedAt === undefined ? elapsed : performance.now() - startedAt);
     button.textContent = startedAt === undefined ? `Start timer · ${time}` : `Stop timer · ${time}`;
   }
@@ -36,7 +37,7 @@ export function createTimer(button: HTMLButtonElement, message: HTMLElement, onF
     }
   }
   button.addEventListener('click', () => {
-    if (!state) return;
+    if (!state || blocked) return;
     if (startedAt !== undefined) { stop('Stopped manually', 'manual'); return; }
     elapsed = 0;
     run = { id: crypto.randomUUID(), startedAt: new Date().toISOString(), initialFacelets: state };
@@ -49,6 +50,8 @@ export function createTimer(button: HTMLButtonElement, message: HTMLElement, onF
   });
   render();
   return {
+    isRunning: () => startedAt !== undefined,
+    setBlocked(value: boolean) { blocked = value; render(); },
     update(nextState: string | undefined) {
       state = nextState;
       if (!state) stop('Interrupted: cube disconnected', 'interrupted');

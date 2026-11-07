@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, test } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
 import { createApp } from '../server/app.mjs';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -82,4 +83,60 @@ test('debugging preference persists and accepts only a boolean', async () => {
   expect(await (await fetch(url + '/api/settings/debugging')).json()).toEqual({ enabled: false });
   expect((await write('/api/settings/debugging', 'PUT', { enabled: 'false' })).status).toBe(400);
   expect(await (await fetch(url + '/api/settings/debugging')).json()).toEqual({ enabled: false });
+});
+
+test('backup is a standalone consistent SQLite database including committed WAL writes', async () => {
+  await write('/api/settings/last-cube', 'PUT', cube);
+  await write('/api/settings/debugging', 'PUT', { enabled: false });
+  const record = timing();
+  await write('/api/timings', 'POST', record);
+  const response = await fetch(url + '/api/database/backup');
+  expect(response.status).toBe(200);
+  expect(response.headers.get('cache-control')).toBe('no-store');
+  expect(response.headers.get('content-type')).toContain('application/vnd.sqlite3');
+  expect(response.headers.get('content-disposition')).toMatch(/attachment; filename="?gancube-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.sqlite"?/);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  expect(bytes.subarray(0, 16).toString()).toBe('SQLite format 3\0');
+  const destination = join(folder, 'saved-copy.sqlite');
+  writeFileSync(destination, bytes);
+  const copy = new DatabaseSync(destination, { readOnly: true });
+  try {
+    expect(copy.prepare('PRAGMA integrity_check').get().integrity_check).toBe('ok');
+    expect(JSON.parse(copy.prepare("SELECT value FROM settings WHERE key='lastCube'").get().value)).toEqual(cube);
+    expect(JSON.parse(copy.prepare("SELECT value FROM settings WHERE key='debugging'").get().value)).toBe(false);
+    expect(copy.prepare('SELECT id, duration_ms FROM timings').all()).toEqual([{ id: record.id, duration_ms: 12345 }]);
+    await write('/api/timings', 'POST', timing());
+    expect(copy.prepare('SELECT count(*) AS count FROM timings').get().count).toBe(1);
+    expect(db.prepare('SELECT count(*) AS count FROM timings').get().count).toBe(2);
+  } finally { copy.close(); }
+});
+
+test('UI restore replaces settings and timings, keeps a recovery backup, and rejects invalid uploads', async () => {
+  await write('/api/settings/last-cube', 'PUT', cube);
+  const original = timing();
+  await write('/api/timings', 'POST', original);
+  const backup = Buffer.from(await (await fetch(url + '/api/database/backup')).arrayBuffer());
+  await write('/api/settings/last-cube', 'PUT', { ...cube, name: 'Replacement' });
+  const extra = timing();
+  await write('/api/timings', 'POST', extra);
+  const restore = (body: Buffer, confirmed = true) => fetch(url + '/api/database/restore', {
+    method: 'POST', headers: { 'Content-Type': 'application/octet-stream', ...(confirmed ? { 'X-Gancube-Restore': 'true' } : {}) }, body,
+  });
+  expect((await restore(backup, false)).status).toBe(400);
+  expect((await restore(Buffer.from('not sqlite'))).status).toBe(400);
+  expect(await (await fetch(url + '/api/settings/last-cube')).json()).toMatchObject({ name: 'Replacement' });
+  const response = await restore(backup);
+  expect(response.status).toBe(200);
+  const result = await response.json();
+  const previous = new DatabaseSync(join(folder, result.previousBackup), { readOnly: true });
+  expect(JSON.parse(previous.prepare('SELECT value FROM settings WHERE key = ?').get('lastCube')!.value as string).name).toBe('Replacement');
+  expect(previous.prepare('SELECT COUNT(*) AS count FROM timings').get()?.count).toBe(2);
+  previous.close();
+  expect(await (await fetch(url + '/api/settings/last-cube')).json()).toEqual(cube);
+  expect(await (await fetch(url + '/api/timings')).json()).toEqual([original]);
+  // The same connection remains writable after the transaction.
+  expect((await write('/api/timings', 'POST', extra)).status).toBe(201);
+  await stop();
+  await start();
+  expect(await (await fetch(url + '/api/settings/last-cube')).json()).toEqual(cube);
 });

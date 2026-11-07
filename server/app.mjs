@@ -1,9 +1,12 @@
 import express from 'express';
+import { snapshot } from '../scripts/database.mjs';
+import { createScrambleService } from './scrambles.mjs';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, resolve, join } from 'node:path';
 
-export function createApp(databasePath) {
+export function createApp(databasePath, { scrambleService = createScrambleService() } = {}) {
   if (databasePath !== ':memory:') mkdirSync(dirname(databasePath), { recursive: true });
   const db = new DatabaseSync(databasePath);
   db.exec(`
@@ -28,7 +31,66 @@ export function createApp(databasePath) {
     PRAGMA user_version = 1;
   `);
   const app = express();
+  app.post('/api/database/restore', (req, res, next) => {
+    // A custom header prevents cross-origin HTML forms from replacing data.
+    if (req.get('X-Gancube-Restore') !== 'true' || !req.is('application/octet-stream')) {
+      return res.status(400).json({ error: 'A SQLite file upload is required' });
+    }
+    next();
+  }, express.raw({ type: 'application/octet-stream', limit: '100mb' }), (req, res, next) => {
+    const directory = mkdtempSync(join(tmpdir(), 'gancube-restore-'));
+    let attached = false;
+    try {
+      const upload = join(directory, 'upload.sqlite');
+      const validated = join(directory, 'validated.sqlite');
+      writeFileSync(upload, req.body);
+      try { snapshot(upload, validated); }
+      catch { return res.status(400).json({ error: 'Invalid, corrupt, or unsupported GAN Cube backup. Your database was not changed.' }); }
+      const filename = `gancube-before-restore-${new Date().toISOString().replace(/[:.]/g, '-')}.sqlite`;
+      const previous = join(databasePath === ':memory:' ? tmpdir() : dirname(resolve(databasePath)), filename);
+      db.prepare('VACUUM INTO ?').run(previous);
+      db.prepare('ATTACH DATABASE ? AS incoming').run(validated);
+      attached = true;
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.exec(`DELETE FROM main.settings;
+          INSERT INTO main.settings (key, value, updated_at) SELECT key, value, updated_at FROM incoming.settings;
+          DELETE FROM main.timings;
+          INSERT INTO main.timings (id, started_at, finished_at, duration_ms, outcome, cube_id, cube_name, initial_facelets)
+            SELECT id, started_at, finished_at, duration_ms, outcome, cube_id, cube_name, initial_facelets FROM incoming.timings;
+          COMMIT;`);
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
+      res.set('Cache-Control', 'no-store').json({ restored: true, previousBackup: filename });
+    } catch (error) { next(error); }
+    finally {
+      if (attached) db.exec('DETACH DATABASE incoming');
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
   app.use(express.json({ limit: '16kb' }));
+  app.get('/api/scrambles/333', async (_req, res) => {
+    try { res.set('Cache-Control', 'no-store').json(await scrambleService.generate()); }
+    catch (error) { res.status(503).json({ error: error.message }); }
+  });
+  app.get('/api/database/backup', (_req, res, next) => {
+    let directory;
+    try {
+      directory = mkdtempSync(join(tmpdir(), 'gancube-backup-'));
+      const filename = `gancube-${new Date().toISOString().replace(/[:.]/g, '-')}.sqlite`;
+      const destination = join(directory, filename);
+      // Include committed WAL data in a consistent, standalone SQLite snapshot.
+      db.prepare('VACUUM INTO ?').run(destination);
+      res.set('Cache-Control', 'no-store');
+      res.type('application/vnd.sqlite3');
+      res.download(destination, filename, error => {
+        rmSync(directory, { recursive: true, force: true });
+        if (error) next(error);
+      });
+    } catch (error) {
+      if (directory) rmSync(directory, { recursive: true, force: true });
+      next(error);
+    }
+  });
   app.get('/api/settings/debugging', (_req, res) => {
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('debugging');
     res.json(row ? { enabled: JSON.parse(row.value) } : null);
@@ -72,9 +134,10 @@ export function createApp(databasePath) {
   });
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Unknown API route' }));
   app.use(express.static(resolve('dist')));
-  app.use((error, _req, res, _next) => {
+  app.use((error, _req, res, next) => {
+    if (res.headersSent) return next(error);
     console.error(error);
-    res.status(error.status ?? 500).json({ error: error.status === 400 ? 'Invalid JSON' : 'Database request failed' });
+    res.status(error.status ?? 500).json({ error: error.status === 413 ? 'Backup exceeds the 100 MB upload limit' : error.status === 400 ? 'Invalid JSON' : 'Database request failed' });
   });
-  return { app, db };
+  return { app, db, closeScrambler: () => scrambleService.close() };
 }

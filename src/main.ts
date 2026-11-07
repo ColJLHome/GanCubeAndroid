@@ -3,20 +3,26 @@ import type { Subscription } from 'rxjs';
 import './style.css';
 import { SOLVED, applyMove, cubeSvg } from './cube';
 import { createTimer, formatTime } from './timer';
+import { setupDatabaseBackup, setupDatabaseRestore } from './database-backup';
+import { setupScrambler } from './scrambler';
 import { databaseRequest, listTimings, saveTiming, type TimingRecord } from './database';
 import { createDebugLog, errorDetails } from './debug-log';
 import { loadCube, saveCube, findSavedDevice, validMac, restoreCube } from './saved-cube';
 import { bluetoothSupportIssue } from './bluetooth-support';
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <header><a href="#cube" class="brand">▦ <span id="cube-label">GAN i Carry 4</span></a><button id="live-badge" class="badge" type="button" title="Connect to your last cube">Disconnected</button><nav aria-label="Main navigation"><a id="cube-nav" href="#cube">Cube</a><a id="settings-nav" href="#settings">Settings</a><a id="log-nav" href="#log">Log</a></nav></header>
+  <header><a href="#cube" class="brand">▦ <span id="cube-label">GAN i Carry 4</span></a><div class="header-controls"><button id="live-badge" class="badge" type="button" title="Connect to your last cube">Disconnected</button><button id="reset-cube" class="secondary" type="button" title="Solve your physical cube first, with white on top and green facing you, then reset to synchronise." disabled aria-describedby="reset-help">Reset to solved</button></div><nav aria-label="Main navigation"><a id="cube-nav" href="#cube">Cube</a><a id="scramble-nav" href="#scramble">Guided scramble</a><a id="settings-nav" href="#settings">Settings</a><a id="log-nav" href="#log">Log</a></nav></header>
   <main><section id="cube-screen" aria-label="Live cube">
     <figure class="cube-figure"><div id="cube-image">${cubeSvg(SOLVED)}</div><figcaption id="cube-caption" role="status">Reference orientation · Connect your cube in Settings to see its state.</figcaption></figure>
     <div class="timer-controls"><button id="solve-timer" type="button" disabled aria-describedby="timer-message">Start timer · 0.00</button><p id="timer-message" role="status" aria-live="polite">Connect your cube to start timing. The timer stops automatically when solved.</p></div>
-    <section class="timing-history" aria-labelledby="history-title"><div class="history-header"><h2 id="history-title">Recent timings</h2><button id="refresh-timings" type="button" class="secondary">Refresh / retry saves</button></div><p id="history-message" role="status">Loading timing history…</p><div class="history-scroll"><table><thead><tr><th scope="col">Started</th><th scope="col">Time</th><th scope="col">Result</th><th scope="col">Cube</th></tr></thead><tbody id="timing-rows"></tbody></table></div></section>
+    <section class="timing-history" aria-labelledby="history-title"><div class="history-header"><h2 id="history-title">Recent timings</h2><button id="refresh-timings" type="button" class="secondary">Refresh / retry saves</button></div><p id="history-message" role="status">Loading timing history…</p><dl class="timing-summary" aria-label="Statistics for the displayed solves"><div><dt>Median</dt><dd id="timing-median">—</dd></div><div><dt>Mean</dt><dd id="timing-mean">—</dd></div></dl><p class="timing-summary-note">Based on the solves shown below, including pending saves.</p><div class="history-scroll"><table><thead><tr><th scope="col">Started</th><th scope="col">Time</th><th scope="col">Result</th><th scope="col">Cube</th></tr></thead><tbody id="timing-rows"></tbody></table></div></section>
     <div class="orientation-guide"><h2>Hold it this way</h2><p><span class="swatch white"></span> White centre on top <span class="swatch green"></span> Green centre facing you <span class="swatch red"></span> Red centre on your right</p><p class="hint">The front face is the one facing you. Keep this orientation while turning faces; the view uses a fixed reference and does not track whole-cube rotations.</p></div>
     <p id="live-move" aria-live="polite">Last move: —</p>
-    <div class="reset-controls"><button id="reset-cube" class="secondary" disabled aria-describedby="reset-help">Reset to solved</button><p id="reset-help">Solve your physical cube first, then reset here to synchronise. Keep white on top and green facing you.</p><p id="reset-message" role="status" aria-live="polite"></p></div>
+    <div class="reset-controls"><p id="reset-help">Solve your physical cube first, then reset here to synchronise. Keep white on top and green facing you.</p><p id="reset-message" role="status" aria-live="polite"></p></div>
+  </section>
+  <section id="scramble-screen" aria-labelledby="scramble-title" hidden><p class="eyebrow">PREPARE YOUR NEXT SOLVE</p><h1 id="scramble-title">Guided scramble.</h1><p class="intro">Connect your cube in Settings and solve it first. Keep white on top and green facing you while following the moves.</p>
+    <section class="panel scrambler" aria-labelledby="scrambler-title"><div class="panel-top"><h2 id="scrambler-title">Guided scramble</h2><button id="generate-scramble" type="button" disabled>New scramble</button></div><p class="scramble-source">3×3 · Generated by <a href="https://github.com/thewca/tnoodle/" target="_blank" rel="noopener noreferrer">TNoodle</a></p><p id="scramble-sequence" aria-label="Scramble sequence"></p><div id="scramble-next" aria-label="Next move">—</div><p id="scramble-instruction"></p><p id="scramble-progress"></p><p id="scramble-message" role="status" aria-live="polite"></p><button id="cancel-scramble" type="button" class="secondary" hidden>Cancel scramble</button></section>
+    <p>When your scramble is verified, <a href="#cube">return to Cube to start the timer</a>.</p>
   </section>
   <section id="settings-screen" aria-labelledby="settings-title" hidden><p class="eyebrow">YOUR CUBE, CONNECTED</p><h1 id="settings-title">Settings.</h1>
   <p class="intro">Manage your cube’s Bluetooth connection.</p>
@@ -30,6 +36,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <details class="advanced"><summary>Bluetooth address / advanced</summary><label for="mac">Cube MAC address (optional)</label><input id="mac" placeholder="AA:BB:CC:DD:EE:FF" spellcheck="false" autocomplete="off" aria-describedby="mac-help"><p id="mac-help">Used to decrypt cube data. Leave blank to try automatic detection. If prompted, find the Bluetooth MAC in CubeStation’s device information or a BLE scanner. This is not the browser’s device ID.</p></details>
   </section>
   <section class="panel debugging-panel" aria-labelledby="debugging-title"><div class="panel-top"><h2 id="debugging-title">Debugging</h2><button id="toggle-debugging" type="button" role="switch" aria-checked="true" aria-describedby="debugging-help">Disable debugging</button></div><p id="debugging-help">Disabling debugging clears the log and stops recording new entries.</p><p id="debugging-feedback" role="status"></p></section>
+  <section class="panel backup-panel" aria-labelledby="backup-title"><div class="panel-top"><h2 id="backup-title">Database backup and restore</h2><button id="backup-database" type="button">Back up database</button></div><p>Choose a location to save a SQLite snapshot of your settings and saved timings.</p><label for="restore-file">Restore a SQLite backup from this or another server (up to 100 MB)</label><input id="restore-file" type="file" accept=".sqlite,.sqlite3,.db,application/vnd.sqlite3" hidden><button id="restore-database" type="button" class="secondary">Restore database…</button><p>Restore replaces all settings and timings. The current database is backed up automatically on the server. Disconnect your cube and save pending timings first.</p><p id="backup-feedback" role="status" aria-live="polite"></p></section>
   <aside><h2>Before you connect</h2><ol><li>Enable Bluetooth on your computer.</li><li>Turn a face to wake your cube and keep it nearby.</li><li>Disconnect CubeStation and other cube apps.</li><li>Select your GAN cube in the browser’s device chooser.</li></ol><p>Use Chrome or Edge with Web Bluetooth support on localhost or HTTPS. Browser and operating system support varies.</p></aside></section>
   <section id="log-screen" aria-labelledby="log-title" hidden><p class="eyebrow">CONNECTION DIAGNOSTICS</p><h1 id="log-title">Debug log.</h1><p class="intro">Connection attempts, cube events, and errors. The latest 500 entries stay in this tab across reloads.</p><p id="logging-state" role="status"></p><div class="log-actions"><button id="copy-log" type="button">Copy log</button><button id="clear-log" type="button" class="secondary">Clear log</button></div><p id="log-feedback" role="status"></p><label for="log-output">Timestamped debug log</label><textarea id="log-output" readonly spellcheck="false" wrap="off"></textarea></section>
   </main><footer>GAN CUBE <span>BLUETOOTH LE</span></footer>
@@ -41,6 +48,7 @@ const disconnect = el<HTMLButtonElement>('disconnect');
 const reset = el<HTMLButtonElement>('reset-cube');
 const mac = el<HTMLInputElement>('mac');
 const dialog = el<HTMLDialogElement>('mac-dialog');
+setupDatabaseBackup(el<HTMLButtonElement>('backup-database'), el('backup-feedback'));
 const debugPreferenceKey = 'gancube.debugging.v1';
 let debuggingEnabled = true;
 let cachedDebugPreference: boolean | null = null;
@@ -127,8 +135,8 @@ window.addEventListener('gan-cube-diagnostic', event => {
 window.addEventListener('error', event => debugLog.add('ERROR', 'Unhandled JavaScript error', errorDetails(event.error ?? event.message)));
 window.addEventListener('unhandledrejection', event => debugLog.add('ERROR', 'Unhandled promise rejection', errorDetails(event.reason)));
 function showScreen() {
-  const current = location.hash === '#settings' ? 'settings' : location.hash === '#log' ? 'log' : 'cube';
-  for (const name of ['cube', 'settings', 'log']) {
+  const current = ['cube', 'scramble', 'settings', 'log'].find(name => location.hash === `#${name}`) ?? 'cube';
+  for (const name of ['cube', 'scramble', 'settings', 'log']) {
     el(`${name}-screen`).hidden = name !== current;
     if (name === current) el(`${name}-nav`).setAttribute('aria-current', 'page');
     else el(`${name}-nav`).removeAttribute('aria-current');
@@ -154,6 +162,12 @@ function renderTimings() {
   const rows = el('timing-rows');
   rows.replaceChildren();
   const records = [...timingHistory.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt) || b.finishedAt.localeCompare(a.finishedAt)).slice(0, 20);
+  const durations = records.map(record => record.durationMs).sort((a, b) => a - b);
+  const middle = Math.floor(durations.length / 2);
+  const median = durations.length % 2 ? durations[middle] : (durations[middle - 1] + durations[middle]) / 2;
+  const mean = durations.reduce((sum, duration) => sum + duration, 0) / durations.length;
+  el('timing-median').textContent = durations.length ? formatTime(median) : '—';
+  el('timing-mean').textContent = durations.length ? formatTime(mean) : '—';
   const pendingIds = new Set(pendingTimings.map(record => record.id));
   for (const record of records) {
     const row = document.createElement('tr');
@@ -206,11 +220,14 @@ const timer = createTimer(el<HTMLButtonElement>('solve-timer'), el('timer-messag
   renderTimings();
   el('history-message').textContent = `${pendingTimings.length} solved timing(s) waiting to save.`;
   void refreshTimings();
-}, () => { runCube = { cubeId: selectedDevice?.id, cubeName: connection?.deviceName }; });
+}, () => { runCube = { cubeId: selectedDevice?.id, cubeName: connection?.deviceName }; scrambler.startSolve(); });
+const scrambler = setupScrambler({ blockTimer: blocked => timer.setBlocked(blocked), timerRunning: () => timer.isRunning() });
+el('solve-timer').addEventListener('click', () => scrambler.refresh());
 let facelets: string | undefined;
 function drawCube() {
   el('cube-image').innerHTML = cubeSvg(facelets ?? SOLVED);
   timer.update(connection ? facelets : undefined);
+  scrambler.update(connection ? facelets : undefined);
 }
 let connection: GanCubeConnection | undefined;
 let subscription: Subscription | undefined;
@@ -391,6 +408,7 @@ async function connectCube(reconnect = false, automatic = false) {
         el('cube-caption').textContent = 'Live cube state · Green front / white top';
       }
       if (event.type === 'MOVE') {
+        scrambler.move(event.move);
         el('move').textContent = event.move;
         el('live-move').textContent = `Last move: ${event.move}`;
         if (facelets) { facelets = applyMove(facelets, event.move); drawCube(); }
@@ -443,6 +461,7 @@ reset.addEventListener('click', async () => {
   reset.textContent = 'Resetting…';
   debugLog.add('INFO', 'Reset to solved requested');
   timer.cancel();
+  scrambler.cancel();
   el('reset-message').textContent = '';
   try {
     // Reset the device's internal state too, so later snapshots agree with the UI.
@@ -472,6 +491,7 @@ disconnect.addEventListener('click', async () => {
   if (active) await active.disconnect().catch(() => {});
 });
 window.addEventListener('pagehide', () => {
+  scrambler.dispose();
   timer.interrupt();
   debugLog.add('INFO', 'Page hidden; closing Bluetooth connection');
   debugLog.flush();
@@ -486,3 +506,15 @@ if (!supported) {
 void refreshTimings();
 
 if (savedCube && supported) void connectCube(true, true);
+
+setupDatabaseRestore(el<HTMLButtonElement>('restore-database'), el<HTMLInputElement>('restore-file'), el('backup-feedback'), {
+  canRestore: () => connection ? 'Disconnect your cube before restoring.'
+    : pendingTimings.length || historyBusy ? 'Wait for pending timings to save (use Refresh / retry saves), then restore.' : undefined,
+  onSuccess: () => {
+    // Do not migrate old browser settings into an empty restored database.
+    for (const key of ['gancube.lastCube.v1', debugPreferenceKey]) {
+      try { localStorage.removeItem(key); } catch { /* Optional browser cache. */ }
+    }
+    window.location.reload();
+  },
+});
