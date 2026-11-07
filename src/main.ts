@@ -12,14 +12,17 @@ import { loadCube, saveCube, findSavedDevice, validMac, restoreCube, listCubes, 
 import { bluetoothSupportIssue } from './bluetooth-support';
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <header><a href="#cube" class="brand">▦ <span id="cube-label">GAN i Carry 4</span></a><div class="header-controls"><button id="live-badge" class="badge" type="button" title="Connect to your last cube">Disconnected</button><button id="reset-cube" class="secondary" type="button" title="Solve your physical cube first, with white on top and green facing you, then reset to synchronise." disabled aria-describedby="reset-help">Reset to solved</button></div><nav aria-label="Main navigation"><a id="cube-nav" href="#cube">Cube</a><a id="scramble-nav" href="#scramble">Guided scramble</a><a id="settings-nav" href="#settings">Settings</a><a id="log-nav" href="#log">Log</a></nav></header>
+  <header><a href="#cube" class="brand">▦ <span id="cube-label">GAN i Carry 4</span></a><div class="header-controls"><button id="live-badge" class="badge" type="button" title="Connect to your last cube">Disconnected</button><button id="reset-cube" class="secondary" type="button" title="Solve your physical cube first, with white on top and green facing you, then reset to synchronise." disabled aria-describedby="reset-help">Reset to solved</button></div><nav aria-label="Main navigation"><a id="cube-nav" href="#cube">Cube</a><a id="timings-nav" href="#timings">Timings</a><a id="scramble-nav" href="#scramble">Guided scramble</a><a id="settings-nav" href="#settings">Settings</a><a id="log-nav" href="#log">Log</a></nav></header>
   <main><section id="cube-screen" aria-label="Live cube">
     <figure class="cube-figure"><div id="cube-image">${cubeSvg(SOLVED)}</div><figcaption id="cube-caption" role="status">Reference orientation · Connect your cube in Settings to see its state.</figcaption></figure>
     <div class="timer-controls"><button id="solve-timer" type="button" disabled aria-describedby="timer-message">Start timer · 0.00</button><p id="timer-message" role="status" aria-live="polite">Connect your cube to start timing. The timer stops automatically when solved.</p></div>
-    <section class="timing-history" aria-labelledby="history-title"><div class="history-header"><h2 id="history-title">Recent timings</h2><button id="refresh-timings" type="button" class="secondary">Refresh / retry saves</button></div><p id="history-message" role="status">Loading timing history…</p><dl class="timing-summary" aria-label="Statistics for the displayed solves"><div><dt>Median</dt><dd id="timing-median">—</dd></div><div><dt>Mean</dt><dd id="timing-mean">—</dd></div></dl><p class="timing-summary-note">Based on the solves shown below, including pending saves.</p><div class="history-scroll"><table><thead><tr><th scope="col">Started</th><th scope="col">Time</th><th scope="col">Result</th><th scope="col">Cube</th></tr></thead><tbody id="timing-rows"></tbody></table></div></section>
+    <dl class="timing-summary" aria-label="Statistics for recent solves"><div><dt>Median</dt><dd id="cube-timing-median">—</dd></div><div><dt>Mean</dt><dd id="cube-timing-mean">—</dd></div></dl><p class="timing-summary-note">Based on the latest 20 solves, including pending saves. <a href="#timings">View saved timings</a>.</p>
     <div class="orientation-guide"><h2>Hold it this way</h2><p><span class="swatch white"></span> White centre on top <span class="swatch green"></span> Green centre facing you <span class="swatch red"></span> Red centre on your right</p><p class="hint">The front face is the one facing you. Keep this orientation while turning faces; the view uses a fixed reference and does not track whole-cube rotations.</p></div>
     <p id="live-move" aria-live="polite">Last move: —</p>
     <div class="reset-controls"><p id="reset-help">Solve your physical cube first, then reset here to synchronise. Keep white on top and green facing you.</p><p id="reset-message" role="status" aria-live="polite"></p></div>
+  </section>
+  <section id="timings-screen" aria-labelledby="timings-title" hidden><h1 id="timings-title">Saved timings.</h1>
+    <section class="timing-history" aria-labelledby="history-title"><div class="history-header"><h2 id="history-title">Recent timings</h2><button id="refresh-timings" type="button" class="secondary">Refresh / retry saves</button></div><p id="history-message" role="status">Loading timing history…</p><dl class="timing-summary" aria-label="Statistics for the displayed solves"><div><dt>Median</dt><dd id="timing-median">—</dd></div><div><dt>Mean</dt><dd id="timing-mean">—</dd></div></dl><p class="timing-summary-note">Based on the solves shown below, including pending saves.</p><div class="history-scroll"><table><thead><tr><th scope="col">Started</th><th scope="col">Time</th><th scope="col">Result</th><th scope="col">Cube</th></tr></thead><tbody id="timing-rows"></tbody></table></div></section>
   </section>
   <section id="scramble-screen" aria-labelledby="scramble-title" hidden><p class="eyebrow">PREPARE YOUR NEXT SOLVE</p><h1 id="scramble-title">Guided scramble.</h1><p class="intro">Connect your cube in Settings and solve it first. Keep white on top and green facing you while following the moves.</p>
     <section class="panel scrambler" aria-labelledby="scrambler-title"><div class="panel-top"><h2 id="scrambler-title">Guided scramble</h2><button id="generate-scramble" type="button" disabled>New scramble</button></div><p class="scramble-source">3×3 · Generated by <a href="https://github.com/thewca/tnoodle/" target="_blank" rel="noopener noreferrer">TNoodle</a></p><p id="scramble-sequence" aria-label="Scramble sequence"></p><div id="scramble-next" aria-label="Next move">—</div><p id="scramble-instruction"></p><p id="scramble-progress"></p><p id="scramble-message" role="status" aria-live="polite"></p><button id="cancel-scramble" type="button" class="secondary" hidden>Cancel scramble</button></section>
@@ -137,8 +140,8 @@ window.addEventListener('gan-cube-diagnostic', event => {
 window.addEventListener('error', event => debugLog.add('ERROR', 'Unhandled JavaScript error', errorDetails(event.error ?? event.message)));
 window.addEventListener('unhandledrejection', event => debugLog.add('ERROR', 'Unhandled promise rejection', errorDetails(event.reason)));
 function showScreen() {
-  const current = ['cube', 'scramble', 'settings', 'log'].find(name => location.hash === `#${name}`) ?? 'cube';
-  for (const name of ['cube', 'scramble', 'settings', 'log']) {
+  const current = ['cube', 'timings', 'scramble', 'settings', 'log'].find(name => location.hash === `#${name}`) ?? 'cube';
+  for (const name of ['cube', 'timings', 'scramble', 'settings', 'log']) {
     el(`${name}-screen`).hidden = name !== current;
     if (name === current) el(`${name}-nav`).setAttribute('aria-current', 'page');
     else el(`${name}-nav`).removeAttribute('aria-current');
@@ -168,8 +171,10 @@ function renderTimings() {
   const middle = Math.floor(durations.length / 2);
   const median = durations.length % 2 ? durations[middle] : (durations[middle - 1] + durations[middle]) / 2;
   const mean = durations.reduce((sum, duration) => sum + duration, 0) / durations.length;
-  el('timing-median').textContent = durations.length ? formatTime(median) : '—';
-  el('timing-mean').textContent = durations.length ? formatTime(mean) : '—';
+  for (const prefix of ['', 'cube-']) {
+    el(`${prefix}timing-median`).textContent = durations.length ? formatTime(median) : '—';
+    el(`${prefix}timing-mean`).textContent = durations.length ? formatTime(mean) : '—';
+  }
   const pendingIds = new Set(pendingTimings.map(record => record.id));
   for (const record of records) {
     const row = document.createElement('tr');
