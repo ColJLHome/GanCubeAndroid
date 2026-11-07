@@ -1,4 +1,12 @@
-# GAN Cube
+# GAN Cube Android
+
+**[Download Android APK v1.2 (0.89 MB)](https://github.com/ColJLHome/GanCubeAndroid/raw/refs/heads/main/downloads/gancube-1.2.apk)**
+
+Requires Android 8+ and Android System WebView/Chrome 124+. Open the downloaded
+APK on your phone and allow installation when Android prompts. This development
+build uses the same signing key as the previous APK, so it can update it in place.
+
+[APK SHA-256 checksum](downloads/gancube-1.2.apk.sha256) · [Installation and build instructions](ANDROID.md)
 
 ## Android APK
 
