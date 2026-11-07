@@ -169,3 +169,10 @@ npm run build
 ```
 
 Tests cover SQLite persistence through reopening a real database, API validation and duplicate retries, settings migration, pending timing retries, timer outcomes, cube state changes, and mocked Bluetooth connection handling. Radio behaviour still requires the physical cube.
+
+Connected cubes are kept in the server’s SQLite database, with one entry per MAC
+address. In Settings, select a cube under **Saved cubes on this server**, then
+select that same physical cube in the browser’s Bluetooth chooser. This reuses
+its MAC address on another computer; Bluetooth permission must still be granted
+on each computer. The list is included in database backups, and the previously
+saved last cube is included automatically.

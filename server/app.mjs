@@ -101,6 +101,26 @@ export function createApp(databasePath, { scrambleService = createScrambleServic
     db.prepare('INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at').run('debugging', JSON.stringify(enabled), new Date().toISOString());
     res.json({ enabled });
   });
+  // Keep registry entries in settings so existing backup/restore includes them.
+  const rememberCube = value => {
+    db.prepare('INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at')
+      .run(`cube:${value.mac}`, JSON.stringify(value), new Date().toISOString());
+  };
+  const legacyCube = db.prepare('SELECT value FROM settings WHERE key = ?').get('lastCube');
+  if (legacyCube) {
+    const value = JSON.parse(legacyCube.value);
+    if (value?.mac && !db.prepare('SELECT 1 FROM settings WHERE key = ?').get(`cube:${value.mac.toUpperCase()}`)) rememberCube({ ...value, mac: value.mac.toUpperCase() });
+  }
+  app.get('/api/cubes', (_req, res) => {
+    // Include lastCube as well: an older backup can be restored while running.
+    const entries = db.prepare("SELECT value FROM settings WHERE key LIKE 'cube:%' ORDER BY updated_at DESC, key").all().map(row => JSON.parse(row.value));
+    const last = db.prepare('SELECT value FROM settings WHERE key = ?').get('lastCube');
+    if (last) {
+      const value = JSON.parse(last.value);
+      if (!entries.some(entry => entry.mac === value.mac)) entries.push(value);
+    }
+    res.set('Cache-Control', 'no-store').json(entries.map(({ name, mac }) => ({ name, mac })));
+  });
   app.get('/api/settings/last-cube', (_req, res) => {
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('lastCube');
     res.json(row ? JSON.parse(row.value) : null);
@@ -112,6 +132,7 @@ export function createApp(databasePath, { scrambleService = createScrambleServic
     }
     const value = { id, name, mac: mac.toUpperCase() };
     db.prepare('INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at').run('lastCube', JSON.stringify(value), new Date().toISOString());
+    rememberCube(value);
     res.json(value);
   });
   app.get('/api/timings', (req, res) => {

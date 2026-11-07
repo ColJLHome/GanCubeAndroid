@@ -140,3 +140,25 @@ test('UI restore replaces settings and timings, keeps a recovery backup, and rej
   await start();
   expect(await (await fetch(url + '/api/settings/last-cube')).json()).toEqual(cube);
 });
+
+test('server cube registry retains multiple cubes and deduplicates MACs across computers', async () => {
+  await write('/api/settings/last-cube', 'PUT', cube);
+  const second = { id: 'second', name: 'Another GAN', mac: '11:22:33:44:55:66' };
+  await write('/api/settings/last-cube', 'PUT', second);
+  await write('/api/settings/last-cube', 'PUT', { ...cube, id: 'another-computer', name: 'Updated GAN', mac: cube.mac.toLowerCase() });
+  await stop();
+  await start();
+  const entries = await (await fetch(url + '/api/cubes')).json();
+  expect(entries).toHaveLength(2);
+  expect(entries).toEqual(expect.arrayContaining([
+    { name: 'Updated GAN', mac: cube.mac },
+    { name: second.name, mac: second.mac },
+  ]));
+});
+
+test('existing last cube is included in the server registry', async () => {
+  db.prepare('INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?)').run('lastCube', JSON.stringify(cube), new Date().toISOString());
+  await stop();
+  await start();
+  expect(await (await fetch(url + '/api/cubes')).json()).toEqual([{ name: cube.name, mac: cube.mac }]);
+});

@@ -30,3 +30,6 @@ export async function findSavedDevice(saved: SavedCube): Promise<BluetoothDevice
   try { return (await navigator.bluetooth.getDevices()).find(device => device.id === saved.id); }
   catch { return; }
 }
+
+export type KnownCube = Pick<SavedCube, 'name' | 'mac'>;
+export const listCubes = () => databaseRequest<KnownCube[]>('cubes');

@@ -8,7 +8,7 @@ import { setupDatabaseBackup, setupDatabaseRestore } from './database-backup';
 import { setupScrambler } from './scrambler';
 import { databaseRequest, listTimings, saveTiming, type TimingRecord } from './database';
 import { createDebugLog, errorDetails } from './debug-log';
-import { loadCube, saveCube, findSavedDevice, validMac, restoreCube } from './saved-cube';
+import { loadCube, saveCube, findSavedDevice, validMac, restoreCube, listCubes, type KnownCube } from './saved-cube';
 import { bluetoothSupportIssue } from './bluetooth-support';
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
@@ -31,6 +31,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div class="panel-top"><h2 id="connection-title">Bluetooth connection</h2><span id="badge" class="badge">Disconnected</span></div>
     <p id="status" role="status" aria-live="polite">Ready when you are. Wake your cube with a few turns.</p>
     <button id="connect">Choose cube <span aria-hidden="true">↗</span></button><p id="saved-cube" class="saved-cube"></p>
+    <div id="known-cubes"><h3>Saved cubes on this server</h3><p id="known-cubes-status" class="saved-cube" role="status"></p><div id="known-cubes-list"></div></div>
     <button id="disconnect" class="secondary" hidden>Disconnect cube</button>
     <dl id="details" hidden><div><dt>Device</dt><dd id="device">—</dd></div><div><dt>Battery</dt><dd id="battery">Waiting for cube</dd></div><div><dt>Last move</dt><dd id="move">Waiting for a turn</dd></div><div><dt>Data</dt><dd id="data">Waiting for cube</dd></div></dl>
     <p id="message" role="alert"></p>
@@ -239,10 +240,35 @@ let responseTimer: ReturnType<typeof setTimeout> | undefined;
 let savedCube = loadCube();
 try { savedCube = await restoreCube(); }
 catch (error) { debugLog.add('ERROR', 'Settings database unavailable; using browser cache', errorDetails(error)); }
+let knownCubes: KnownCube[] = [];
+let explicitlySelectedMac: string | undefined;
+async function refreshKnownCubes() {
+  try {
+    knownCubes = await listCubes();
+    el('known-cubes-list').replaceChildren(...knownCubes.map(cube => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'secondary known-cube';
+      button.textContent = `${cube.name} · ${cube.mac}`;
+      button.addEventListener('click', () => {
+        explicitlySelectedMac = cube.mac;
+        mac.value = cube.mac;
+        void connectCube();
+      });
+      return button;
+    }));
+    el('known-cubes-status').textContent = knownCubes.length
+      ? 'Select a cube, then choose that same cube in the Bluetooth window. Addresses are shared across computers using this server.'
+      : 'Cubes and their MAC addresses will appear here after connecting.';
+  } catch {
+    el('known-cubes-status').textContent = 'Could not load saved cubes. Check that the API server is running.';
+  }
+}
+await refreshKnownCubes();
 let rememberedDevice: BluetoothDevice | undefined;
 function showSavedCube() {
   el('cube-label').textContent = savedCube?.name || 'GAN i Carry 4';
-  el('saved-cube').textContent = savedCube ? `Last cube: ${savedCube.name}. Click Disconnected on the Cube screen to reconnect.` : 'Your last cube will be remembered on this browser.';
+  el('saved-cube').textContent = savedCube ? `Last cube: ${savedCube.name}. Click Disconnected on the Cube screen to reconnect.` : 'Connected cubes are remembered on this server.';
 }
 showSavedCube();
 if (savedCube) mac.value = savedCube.mac;
@@ -329,6 +355,8 @@ async function connectCube(reconnect = false, automatic = false) {
   moveCount = 0;
   lastMoveAt = undefined;
   el('message').textContent = '';
+  const chosenMac = explicitlySelectedMac;
+  explicitlySelectedMac = undefined;
   const suppliedMac = reconnect && savedCube ? savedCube.mac : mac.value.trim().toUpperCase();
   if (suppliedMac && !validMac(suppliedMac)) {
     el('message').textContent = 'Enter six pairs of hexadecimal digits separated by colons, e.g. AA:BB:CC:DD:EE:FF.';
@@ -364,6 +392,7 @@ async function connectCube(reconnect = false, automatic = false) {
       selectedDevice = device;
       debugLog.add('INFO', 'Cube selected / MAC resolution', { device: device.name, fallback: !!fallback, savedAddress: device.id === savedCube?.id, manualAddress: !!suppliedMac });
       status('Preparing the encrypted connection. Automatic address detection may take 10 seconds.', 'Connecting');
+      if (chosenMac) return chosenMac;
       // A saved MAC belongs only to its exact device; never reuse it for another cube.
       if (savedCube && device.id === savedCube.id && (!suppliedMac || suppliedMac === savedCube.mac)) return savedCube.mac;
       if (suppliedMac && suppliedMac !== savedCube?.mac) return suppliedMac;
@@ -438,6 +467,7 @@ async function connectCube(reconnect = false, automatic = false) {
       savedCube = { id: selectedDevice.id, name: active.deviceName || 'GAN cube', mac: active.deviceMAC.toUpperCase() };
       mac.value = savedCube.mac;
       const persisted = await saveCube(savedCube);
+      if (persisted) await refreshKnownCubes();
       showSavedCube();
       if (!persisted) el('saved-cube').textContent = 'Could not save cube settings to SQLite. Check that the API server is running.';
     }
