@@ -1,3 +1,4 @@
+import { createCubeAnimation } from './cube-animation';
 import { connectGanCube, type GanCubeConnection } from 'gan-web-bluetooth';
 import type { Subscription } from 'rxjs';
 import './style.css';
@@ -224,8 +225,9 @@ const timer = createTimer(el<HTMLButtonElement>('solve-timer'), el('timer-messag
 const scrambler = setupScrambler({ blockTimer: blocked => timer.setBlocked(blocked), timerRunning: () => timer.isRunning() });
 el('solve-timer').addEventListener('click', () => scrambler.refresh());
 let facelets: string | undefined;
-function drawCube() {
-  el('cube-image').innerHTML = cubeSvg(facelets ?? SOLVED);
+const cubeAnimation = createCubeAnimation(el('cube-image'), SOLVED);
+function drawCube(move?: string) {
+  cubeAnimation.update(facelets ?? SOLVED, move);
   timer.update(connection ? facelets : undefined);
   scrambler.update(connection ? facelets : undefined);
 }
@@ -411,7 +413,7 @@ async function connectCube(reconnect = false, automatic = false) {
         scrambler.move(event.move);
         el('move').textContent = event.move;
         el('live-move').textContent = `Last move: ${event.move}`;
-        if (facelets) { facelets = applyMove(facelets, event.move); drawCube(); }
+        if (facelets) { facelets = applyMove(facelets, event.move); drawCube(event.move); }
       }
     });
     // A read-request failure must not close an otherwise usable Bluetooth link.

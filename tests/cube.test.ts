@@ -25,3 +25,17 @@ test('reference drawing shows nine stickers on each visible face', () => {
     expect(cubeSvg(SOLVED).split(`fill="${color}"`)).toHaveLength(10);
   }
 });
+for (const face of 'URFDLB') {
+  for (const suffix of ['', "'", '2']) {
+    test(`animated ${face}${suffix} ends at the correct sticker geometry`, () => {
+      const move = face + suffix;
+      // Compare polygons independent of their painter ordering and corner order.
+      const polygons = (svg: string) => [...svg.matchAll(/<polygon points="([^"]+)" fill="([^"]+)"/g)].map(([, points, color]) =>
+        color + ':' + points.split(' ').map(p => p.split(',').map(n => Math.round(Number(n)*1000)/1000).join(',')).sort().join(' ')
+      ).sort();
+      const state = applyMove(applyMove(SOLVED, 'R'), 'U');
+      expect(polygons(cubeSvg(state, move, 1))).toEqual(polygons(cubeSvg(applyMove(state, move))));
+      expect(cubeSvg(state, move, .5)).not.toBe(cubeSvg(state));
+    });
+  }
+}

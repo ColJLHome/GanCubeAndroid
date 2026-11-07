@@ -34,22 +34,31 @@ export function applyMove(state: string, move: string): string {
   return next.join('');
 }
 const colors: Record<string, string> = { U: '#f3f3ed', R: '#ee5755', F: '#51c990', D: '#f3d45c', L: '#f29b48', B: '#5296e0' };
-/** Front is facing the viewer, with a small top/right perspective for depth. */
-export function cubeSvg(state: string): string {
-  const project = (face: string, u: number, v: number) => {
-    if (face === 'U') return [70 + u*84 + v*28, 76 + v*-20];
-    if (face === 'R') return [322 + u*28, 76 - u*20 + v*84];
-    return [70 + u*84, 76 + v*84];
+/** Fixed front/top/right projection, including the hidden stickers during turns. */
+export function cubeSvg(state: string, move?: string, progress = 0): string {
+  const match = /^([URFDLB])([2']?)$/.exec(move ?? '');
+  const axis = match ? normals[faces.indexOf(match[1] as typeof faces[number])] : undefined;
+  const angle = match ? -Math.PI / 2 * (match[2] === "'" ? -1 : match[2] === '2' ? 2 : 1) * progress : 0;
+  const turn = (v: Vector): Vector => {
+    if (!axis) return v;
+    const cross = [axis[1]*v[2]-axis[2]*v[1], axis[2]*v[0]-axis[0]*v[2], axis[0]*v[1]-axis[1]*v[0]];
+    return v.map((x, i) => x*Math.cos(angle) + cross[i]*Math.sin(angle) + axis[i]*dot(axis,v)*(1-Math.cos(angle))) as Vector;
   };
-  const polygons = (['U', 'R', 'F'] as const).map(face => {
-    const offset = faces.indexOf(face)*9;
-    return Array.from({ length: 9 }, (_, i) => {
-      const c = i%3, r = Math.floor(i/3), gap = .035;
-      // Up face row zero is at the back; front edge is row two.
-      const corners = [[c+gap,r+gap],[c+1-gap,r+gap],[c+1-gap,r+1-gap],[c+gap,r+1-gap]];
-      const points = corners.map(([x,y]) => project(face, x, face === 'U' ? 3-y : y).join(',')).join(' ');
-      return `<polygon points="${points}" fill="${colors[state[offset+i]] ?? '#52616d'}" stroke="#101820" stroke-width="3" stroke-linejoin="round"/>`;
-    }).join('');
-  }).join('');
+  const horizontal: Vector[] = [[1,0,0],[0,0,-1],[1,0,0],[1,0,0],[0,0,1],[-1,0,0]];
+  const vertical: Vector[] = [[0,0,1],[0,-1,0],[0,-1,0],[0,0,-1],[0,-1,0],[0,-1,0]];
+  const view: Vector = [1/3, 20/84, 1];
+  const polygons = geometry.map(({ position, normal }, index) => {
+    const moving = axis && dot(position, axis) === 1;
+    const centre = position.map((x,i) => x + normal[i]*.5) as Vector;
+    const n = moving ? turn(normal) : normal;
+    if (dot(n,view) <= .00001) return undefined;
+    const f = Math.floor(index/9);
+    const corners = [[-1,-1],[1,-1],[1,1],[-1,1]].map(([u,v]) => {
+      const point = centre.map((x,i) => x + .465*(u*horizontal[f][i]+v*vertical[f][i])) as Vector;
+      const [x,y,z] = moving ? turn(point) : point;
+      return `${196+84*x+28*(1.5-z)},${202-84*y-20*(1.5-z)}`;
+    });
+    return { depth: dot(moving ? turn(centre) : centre, view), svg: `<polygon points="${corners.join(' ')}" fill="${colors[state[index]] ?? '#52616d'}" stroke="#101820" stroke-width="3" stroke-linejoin="round"/>` };
+  }).filter(p => p !== undefined).sort((a,b) => a.depth-b.depth).map(p => p.svg).join('');
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 390" role="img" aria-label="Cube state, white centre on top, green centre facing you, red centre on the right"><title>Cube viewed from the green front face</title>${polygons}</svg>`;
 }
