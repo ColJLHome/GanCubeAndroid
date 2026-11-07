@@ -24,6 +24,66 @@ npm start
 
 Open `http://localhost:3001`. The API binds to the local computer. No cloud account is required.
 
+## Run as a Linux service (systemd)
+
+Use a systemd user service to start the production build automatically under your Linux account. Run these commands as your normal user from the project directory:
+
+```sh
+npm install
+npm run setup:tnoodle
+npm run build
+mkdir -p ~/.config/systemd/user
+command -v node
+pwd
+```
+
+Create `~/.config/systemd/user/gancube.service` with the following contents. Replace `/absolute/path/to/gancube` with the directory printed by `pwd`, and `/absolute/path/to/node` with the executable printed by `command -v node`. Use absolute paths; systemd does not load your shell profile or expand `~` in these settings. If either path contains spaces, wrap the entire path in double quotes.
+
+```ini
+[Unit]
+Description=GAN Cube viewer and timer
+
+[Service]
+Type=simple
+WorkingDirectory=/absolute/path/to/gancube
+ExecStart=/absolute/path/to/node server/index.mjs
+Environment=NODE_ENV=production
+Environment=PORT=3001
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+The working directory is required to find `dist`, the TNoodle runtime, and the default `data/gancube.sqlite` database. Your user must be able to write to the project’s `data` and `.runtime/tnoodle` directories. Run TNoodle setup in this same checkout before starting the service. If you use a custom Java executable, add `Environment="JAVA=/absolute/path/to/java"` to `[Service]`; the service does not inherit variables from your interactive shell. You can similarly set `GANCUBE_DB_PATH` to an absolute database path.
+
+Enable and start the service:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now gancube.service
+systemctl --user status gancube.service
+```
+
+Open `http://localhost:3001` in your local browser. Bluetooth access still happens in the browser, so the service needs no Bluetooth permissions. Stop any manually started API using the same port before starting the service.
+
+To start at boot and keep running after logout, enable lingering for your account (this may require administrator authentication):
+
+```sh
+loginctl enable-linger "$USER"
+```
+
+View logs, restart after rebuilding or updating the app, or stop and disable the service:
+
+```sh
+journalctl --user -u gancube.service -f
+systemctl --user restart gancube.service
+systemctl --user disable --now gancube.service
+```
+
+After changing the unit file, run `systemctl --user daemon-reload` and restart the service. If a Node version manager changes or removes the executable path, update `ExecStart` as well. Rebuild with `npm run build` after frontend changes; restarting alone does not rebuild the app.
+
 ## Connect and use
 
 Wake the cube with a few turns, close CubeStation or any other connected cube app, then open **Settings → Choose cube**. The app tries automatic Bluetooth MAC discovery and offers manual entry when needed. Find the hardware MAC in CubeStation device information or a BLE scanner; the browser device ID is not the MAC.
