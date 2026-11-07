@@ -1,3 +1,4 @@
+import { isAndroid, NativeCube } from './native';
 export function backupFilename(date = new Date()): string {
   return `gancube-${date.toISOString().replace(/[:.]/g, '-')}.sqlite`;
 }
@@ -13,6 +14,11 @@ export function setupDatabaseBackup(button: HTMLButtonElement, feedback: HTMLEle
     const filename = backupFilename();
     let writable: FileSystemWritableFileStream | undefined;
     try {
+      if (isAndroid) {
+        await NativeCube.backup({ filename });
+        feedback.textContent = `Backup saved: ${filename}`;
+        return;
+      }
       const picker = (window as Window & { showSaveFilePicker?: SavePicker }).showSaveFilePicker;
       // Open the chooser before network work so the user's click still grants access.
       const handle = picker ? await picker.call(window, {
@@ -59,7 +65,22 @@ export function setupDatabaseRestore(
   options: { canRestore: () => string | undefined; onSuccess: () => void },
 ) {
   let busy = false;
-  button.addEventListener('click', () => { if (!busy) input.click(); });
+  button.addEventListener('click', async () => {
+    if (busy) return;
+    if (!isAndroid) { input.click(); return; }
+    const blocked = options.canRestore();
+    if (blocked) { feedback.textContent = blocked; return; }
+    if (!window.confirm('Restore a SQLite backup? This replaces all settings and timings. A recovery backup will be kept on this device.')) return;
+    busy = true;
+    button.disabled = true;
+    try {
+      const result = await NativeCube.restore();
+      feedback.textContent = `Restored. Recovery backup: ${result.previousBackup}`;
+      options.onSuccess();
+    } catch (error) {
+      feedback.textContent = `Restore failed. ${error instanceof Error ? error.message : String(error)}`;
+    } finally { busy = false; button.disabled = false; }
+  });
   input.addEventListener('change', async () => {
     const file = input.files?.[0];
     if (!file || busy) return;

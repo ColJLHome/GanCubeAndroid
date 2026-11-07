@@ -1,4 +1,5 @@
 import { SOLVED } from './cube';
+import { isAndroid, nativeRequest } from './native';
 import { ScrambleGuide } from './scramble-guide';
 const descriptions: Record<string, string> = { U: 'top (white centre)', R: 'right (red centre)', F: 'front (green centre)', D: 'bottom (yellow centre)', L: 'left (orange centre)', B: 'back (blue centre)' };
 export function setupScrambler(options: { blockTimer(blocked: boolean): void; timerRunning(): boolean }) {
@@ -36,9 +37,13 @@ export function setupScrambler(options: { blockTimer(blocked: boolean): void; ti
     if (generate.disabled) return;
     const active = new AbortController(); request = active; loading = true; notice = ''; render();
     try {
-      const response = await fetch('/api/scrambles/333', { cache: 'no-store', signal: AbortSignal.any([active.signal, AbortSignal.timeout(90000)]) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Scramble generation failed');
+      let data: { scramble: string };
+      if (isAndroid) data = await nativeRequest('scrambles/333');
+      else {
+        const response = await fetch('/api/scrambles/333', { cache: 'no-store', signal: AbortSignal.any([active.signal, AbortSignal.timeout(90000)]) });
+        data = await response.json();
+        if (!response.ok) throw new Error((data as { error?: string }).error || 'Scramble generation failed');
+      }
       if (request !== active) return;
       if (state !== SOLVED || options.timerRunning()) throw new Error('Cube moved while generating. Solve it and generate again.');
       guide = new ScrambleGuide(data.scramble);

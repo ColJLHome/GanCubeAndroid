@@ -1,4 +1,5 @@
 import { createCubeAnimation } from './cube-animation';
+import { isAndroid } from './native';
 import { connectGanCube, type GanCubeConnection } from 'gan-web-bluetooth';
 import type { Subscription } from 'rxjs';
 import './style.css';
@@ -34,15 +35,15 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div class="panel-top"><h2 id="connection-title">Bluetooth connection</h2><span id="badge" class="badge">Disconnected</span></div>
     <p id="status" role="status" aria-live="polite">Ready when you are. Wake your cube with a few turns.</p>
     <button id="connect">Choose cube <span aria-hidden="true">↗</span></button><p id="saved-cube" class="saved-cube"></p>
-    <div id="known-cubes"><h3>Saved cubes on this server</h3><p id="known-cubes-status" class="saved-cube" role="status"></p><div id="known-cubes-list"></div></div>
+    <div id="known-cubes"><h3>Saved cubes on this ${isAndroid ? 'device' : 'server'}</h3><p id="known-cubes-status" class="saved-cube" role="status"></p><div id="known-cubes-list"></div></div>
     <button id="disconnect" class="secondary" hidden>Disconnect cube</button>
     <dl id="details" hidden><div><dt>Device</dt><dd id="device">—</dd></div><div><dt>Battery</dt><dd id="battery">Waiting for cube</dd></div><div><dt>Last move</dt><dd id="move">Waiting for a turn</dd></div><div><dt>Data</dt><dd id="data">Waiting for cube</dd></div></dl>
     <p id="message" role="alert"></p>
     <details class="advanced"><summary>Bluetooth address / advanced</summary><label for="mac">Cube MAC address (optional)</label><input id="mac" placeholder="AA:BB:CC:DD:EE:FF" spellcheck="false" autocomplete="off" aria-describedby="mac-help"><p id="mac-help">Used to decrypt cube data. Leave blank to try automatic detection. If prompted, find the Bluetooth MAC in CubeStation’s device information or a BLE scanner. This is not the browser’s device ID.</p></details>
   </section>
   <section class="panel debugging-panel" aria-labelledby="debugging-title"><div class="panel-top"><h2 id="debugging-title">Debugging</h2><button id="toggle-debugging" type="button" role="switch" aria-checked="true" aria-describedby="debugging-help">Disable debugging</button></div><p id="debugging-help">Disabling debugging clears the log and stops recording new entries.</p><p id="debugging-feedback" role="status"></p></section>
-  <section class="panel backup-panel" aria-labelledby="backup-title"><div class="panel-top"><h2 id="backup-title">Database backup and restore</h2><button id="backup-database" type="button">Back up database</button></div><p>Choose a location to save a SQLite snapshot of your settings and saved timings.</p><label for="restore-file">Restore a SQLite backup from this or another server (up to 100 MB)</label><input id="restore-file" type="file" accept=".sqlite,.sqlite3,.db,application/vnd.sqlite3" hidden><button id="restore-database" type="button" class="secondary">Restore database…</button><p>Restore replaces all settings and timings. The current database is backed up automatically on the server. Disconnect your cube and save pending timings first.</p><p id="backup-feedback" role="status" aria-live="polite"></p></section>
-  <aside><h2>Before you connect</h2><ol><li>Enable Bluetooth on your computer.</li><li>Turn a face to wake your cube and keep it nearby.</li><li>Disconnect CubeStation and other cube apps.</li><li>Select your GAN cube in the browser’s device chooser.</li></ol><p>Use Chrome or Edge with Web Bluetooth support on localhost or HTTPS. Browser and operating system support varies.</p></aside></section>
+  <section class="panel backup-panel" aria-labelledby="backup-title"><div class="panel-top"><h2 id="backup-title">Database backup and restore</h2><button id="backup-database" type="button">Back up database</button></div><p>Choose a location to save a SQLite snapshot of your settings and saved timings.</p><label for="restore-file">Restore a SQLite backup (up to 100 MB)</label><input id="restore-file" type="file" accept=".sqlite,.sqlite3,.db,application/vnd.sqlite3" hidden><button id="restore-database" type="button" class="secondary">Restore database…</button><p>Restore replaces all settings and timings. The current database is backed up automatically before replacement. Disconnect your cube and save pending timings first.</p><p id="backup-feedback" role="status" aria-live="polite"></p></section>
+  <aside><h2>Before you connect</h2><ol><li>Enable Bluetooth on your device.</li><li>Turn a face to wake your cube and keep it nearby.</li><li>Disconnect CubeStation and other cube apps.</li><li>Select your GAN cube in the browser’s device chooser.</li></ol><p>Use Chrome or Edge with Web Bluetooth support on localhost or HTTPS. Browser and operating system support varies.</p></aside></section>
   <section id="log-screen" aria-labelledby="log-title" hidden><p class="eyebrow">CONNECTION DIAGNOSTICS</p><h1 id="log-title">Debug log.</h1><p class="intro">Connection attempts, cube events, and errors. The latest 500 entries stay in this tab across reloads.</p><p id="logging-state" role="status"></p><div class="log-actions"><button id="copy-log" type="button">Copy log</button><button id="clear-log" type="button" class="secondary">Clear log</button></div><p id="log-feedback" role="status"></p><label for="log-output">Timestamped debug log</label><textarea id="log-output" readonly spellcheck="false" wrap="off"></textarea></section>
   </main><footer>GAN CUBE <span>BLUETOOTH LE</span></footer>
   <dialog id="mac-dialog"><form id="mac-form"><h2>Enter your cube’s address</h2><p>Automatic detection wasn’t available. Enter the cube’s Bluetooth MAC address to finish connecting.</p><label for="fallback-mac">Bluetooth MAC address</label><input id="fallback-mac" placeholder="AA:BB:CC:DD:EE:FF" required pattern="([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}" autocomplete="off" spellcheck="false"><div class="dialog-actions"><button type="button" id="cancel" class="secondary">Cancel</button><button type="submit">Continue</button></div></form></dialog>`;
@@ -277,17 +278,17 @@ async function refreshKnownCubes() {
       return button;
     }));
     el('known-cubes-status').textContent = knownCubes.length
-      ? 'Select a cube, then choose that same cube in the Bluetooth window. Addresses are shared across computers using this server.'
+      ? isAndroid ? 'Select a cube, then choose that same cube in the Bluetooth window. Saved addresses are included in database backups.' : 'Select a cube, then choose that same cube in the Bluetooth window. Addresses are shared across computers using this server.'
       : 'Cubes and their MAC addresses will appear here after connecting.';
   } catch {
-    el('known-cubes-status').textContent = 'Could not load saved cubes. Check that the API server is running.';
+    el('known-cubes-status').textContent = isAndroid ? 'Could not load saved cubes. Close and reopen the app to retry.' : 'Could not load saved cubes. Check that the API server is running.';
   }
 }
 await refreshKnownCubes();
 let rememberedDevice: BluetoothDevice | undefined;
 function showSavedCube() {
   el('cube-label').textContent = savedCube?.name || 'GAN i Carry 4';
-  el('saved-cube').textContent = savedCube ? `Last cube: ${savedCube.name}. Click Disconnected on the Cube screen to reconnect.` : 'Connected cubes are remembered on this server.';
+  el('saved-cube').textContent = savedCube ? `Last cube: ${savedCube.name}. Click Disconnected on the Cube screen to reconnect.` : isAndroid ? 'Connected cubes are remembered on this device.' : 'Connected cubes are remembered on this server.';
 }
 showSavedCube();
 if (savedCube) mac.value = savedCube.mac;
@@ -385,7 +386,7 @@ async function connectCube(reconnect = false, automatic = false) {
   }
   busy = true;
   connect.disabled = true;
-  status(reconnect && savedCube ? `Reconnecting to ${savedCube.name}… Wake your cube and keep it nearby.` : 'Choose your cube in the browser’s Bluetooth window.', 'Connecting');
+  status(reconnect && savedCube ? `Reconnecting to ${savedCube.name}… Wake your cube and keep it nearby.` : 'Choose your cube in the Bluetooth window.', 'Connecting');
   try {
     let knownDevice: BluetoothDevice | undefined;
     if (reconnect && savedCube) {
@@ -415,6 +416,7 @@ async function connectCube(reconnect = false, automatic = false) {
       // A saved MAC belongs only to its exact device; never reuse it for another cube.
       if (savedCube && device.id === savedCube.id && (!suppliedMac || suppliedMac === savedCube.mac)) return savedCube.mac;
       if (suppliedMac && suppliedMac !== savedCube?.mac) return suppliedMac;
+      if (isAndroid && validMac(device.id)) return device.id.toUpperCase();
       if (!fallback) return null;
       if (savedCube && device.id !== savedCube.id && mac.value.trim().toUpperCase() === savedCube.mac) mac.value = '';
       status('Enter your cube’s Bluetooth address to continue.', 'Address needed');
@@ -548,6 +550,12 @@ window.addEventListener('pagehide', () => {
   debugLog.flush();
   timer.dispose();
   selectedDevice?.gatt?.disconnect();
+});
+if (isAndroid) document.addEventListener('visibilitychange', () => {
+  if (document.hidden && connection) {
+    timer.interrupt();
+    clearSession('App moved to background. Tap Disconnected to reconnect.');
+  }
 });
 if (!supported) {
   connect.disabled = true;

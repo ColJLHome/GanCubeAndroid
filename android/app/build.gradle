@@ -1,0 +1,74 @@
+apply plugin: 'com.android.application'
+
+dependencyLocking { lockAllConfigurations() }
+
+android {
+    namespace = "com.coljlhome.gancube"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.coljlhome.gancube"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 3
+        versionName "1.2"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        // Installable optimized build without requiring a distribution keystore.
+        // Shares the existing debug key, so it can update the earlier APK.
+        sideload {
+            initWith release
+            signingConfig signingConfigs.debug
+            matchingFallbacks = ['release']
+        }
+    }
+    testOptions { unitTests.includeAndroidResources = true }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation 'org.worldcubeassociation.tnoodle:scrambler-min2phase:0.20.0'
+    testImplementation 'org.robolectric:robolectric:4.16'
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+// Audit the resolved native libraries, not test tools or just direct declarations.
+tasks.register('writeRuntimeDependencyReport') {
+    def report = layout.buildDirectory.file('reports/runtime-dependencies.json')
+    outputs.file(report)
+    outputs.upToDateWhen { false }
+    doLast {
+        def modules = configurations.sideloadRuntimeClasspath.incoming.resolutionResult.allComponents
+            .collect { it.id }
+            .findAll { it instanceof org.gradle.api.artifacts.component.ModuleComponentIdentifier }
+            .collect { [name: "${it.group}:${it.module}".toString(), version: it.version] }
+            .unique().sort { it.name }
+        def target = report.get().asFile
+        target.parentFile.mkdirs()
+        target.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(modules))
+        println "Native dependency report: ${target}"
+    }
+}

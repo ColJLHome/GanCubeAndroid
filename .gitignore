@@ -6,3 +6,6 @@ data/
 *.sqlite-shm
 *.sqlite-wal
 .runtime/
+artifacts/
+*.jks
+*.keystore

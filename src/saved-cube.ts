@@ -1,4 +1,5 @@
 import { databaseRequest } from './database';
+import { isAndroid } from './native';
 export interface SavedCube { id: string; name: string; mac: string }
 const KEY = 'gancube.lastCube.v1';
 export const validMac = (value: string) => /^([\da-f]{2}:){5}[\da-f]{2}$/i.test(value);
@@ -26,6 +27,10 @@ export async function restoreCube(): Promise<SavedCube | null> {
 }
 /** Never substitute a similarly named cube for the saved browser device ID. */
 export async function findSavedDevice(saved: SavedCube): Promise<BluetoothDevice | undefined> {
+  if (isAndroid && validMac(saved.id)) {
+    const { AndroidDevice } = await import('./android-bluetooth');
+    return new AndroidDevice({ deviceId: saved.id, name: saved.name }) as unknown as BluetoothDevice;
+  }
   if (typeof navigator.bluetooth.getDevices !== 'function') return;
   try { return (await navigator.bluetooth.getDevices()).find(device => device.id === saved.id); }
   catch { return; }

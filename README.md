@@ -1,5 +1,12 @@
 # GAN Cube
 
+## Android APK
+
+This checkout includes a standalone Android app with native BLE, SQLite and offline
+TNoodle scrambling. See [ANDROID.md](ANDROID.md) for installation, building and testing.
+Run `npm run android:build` to create an optimized sideload APK, or
+`npm run android:build:debug` for a debug build.
+
 Bluetooth LE cube viewer and timer, built with TypeScript/Vite and a local Node API backed by SQLite.
 
 ## Run

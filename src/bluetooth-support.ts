@@ -1,5 +1,7 @@
+import { isAndroid } from './native';
 /** Report actionable browser restrictions before opening the device chooser. */
 export function bluetoothSupportIssue(): string | null {
+  if (isAndroid) return null;
   if (!window.isSecureContext) {
     return 'This page is not secure enough for Bluetooth. Open the app at http://localhost:5173 on this computer, or serve it over HTTPS. A plain HTTP network address will not work.';
   }

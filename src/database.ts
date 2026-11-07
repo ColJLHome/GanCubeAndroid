@@ -1,3 +1,4 @@
+import { isAndroid, nativeRequest } from './native';
 export type TimingOutcome = 'solved' | 'manual' | 'reset' | 'interrupted';
 export interface TimingRecord {
   id: string;
@@ -10,6 +11,7 @@ export interface TimingRecord {
   cubeName?: string | null;
 }
 export async function databaseRequest<T>(path: string, options?: RequestInit): Promise<T> {
+  if (isAndroid) return nativeRequest<T>(path, options);
   const response = await fetch(`/api/${path}`, { ...options, signal: AbortSignal.timeout(8000), headers: { 'Content-Type': 'application/json' } });
   if (!response.ok) throw new Error(`Database request failed (${response.status}). Check that the API server is running.`);
   return response.json() as Promise<T>;
